@@ -180,7 +180,7 @@ $tinymceUrl = file_exists($tinymceLocalPath)
     <div class="actions">
       <span id="save-status" class="save-status auth-only"></span>
       <button class="btn btn-primary auth-only" onclick="saveDoc()" title="保存 (Ctrl+S)">保存</button>
-      <button id="login-btn" class="btn btn-primary" onclick="showLoginModal()">登录编辑</button>
+      <button id="login-btn" class="btn btn-primary" onclick="showLoginModal()">登录</button>
       <button id="logout-btn" class="btn auth-only" onclick="doLogout()">退出登录</button>
     </div>
   </div>
@@ -418,14 +418,19 @@ function renderNode(node) {
   };
   div.appendChild(del);
 
-  // 子节点容器
-  if (node.is_folder == 1 && node.children.length) {
+  // 文件夹：渲染子节点容器 + 折叠 + 新建按钮
+  if (node.is_folder == 1) {
     const childContainer = document.createElement('div');
     childContainer.className = 'tree-children';
-    node.children.forEach(c => childContainer.appendChild(renderNode(c)));
+    if (node.children.length) {
+      node.children.forEach(c => childContainer.appendChild(renderNode(c)));
+    }
     div.appendChild(childContainer);
 
+    // 点击文件夹标题行：折叠/展开
     div.onclick = (e) => {
+      // 避免点击按钮时触发折叠
+      if (e.target.closest('.tree-btn')) return;
       e.stopPropagation();
       childContainer.style.display = childContainer.style.display === 'none' ? 'block' : 'none';
       icon.textContent = childContainer.style.display === 'none' ? '📂' : '📁';
