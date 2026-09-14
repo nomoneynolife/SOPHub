@@ -1,0 +1,18 @@
+# 运行时数据（用户上传的文档和图片，不应提交到仓库）
+data/
+
+# TinyMCE 离线资源（体积大，用户自行下载）
+tinymce/
+
+# 编辑器临时文件
+*.tmp
+*.bak
+*.swp
+
+# 系统文件
+Thumbs.db
+.DS_Store
+
+# IDE 配置
+.vscode/
+.idea/
