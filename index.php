@@ -55,6 +55,8 @@ $tinymceUrl = file_exists($tinymceLocalPath)
   /* 游客态隐藏的元素 */
   .auth-only { display: none; }
   body.authed .auth-only { display: inline-flex; align-items: center; }
+  .guest-only { display: inline-flex; align-items: center; }
+  body.authed .guest-only { display: none; }
 
   .body { flex: 1; display: flex; min-height: 0; }
 
@@ -194,7 +196,7 @@ $tinymceUrl = file_exists($tinymceLocalPath)
     <div class="actions">
       <span id="save-status" class="save-status auth-only"></span>
       <button class="btn btn-primary auth-only" onclick="saveDoc()" title="保存 (Ctrl+S)">保存</button>
-      <button id="login-btn" class="btn btn-primary" onclick="showLoginModal()">登录</button>
+      <button id="login-btn" class="btn btn-primary guest-only" onclick="showLoginModal()">登录</button>
       <button id="logout-btn" class="btn auth-only" onclick="doLogout()">退出登录</button>
     </div>
   </div>
