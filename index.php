@@ -137,10 +137,6 @@ $tinymceUrl = file_exists($tinymceLocalPath)
     position: absolute; inset: 0; overflow-y: auto; padding: 24px 32px;
     background: #fff; display: none;
   }
-  #read-view .read-title {
-    font-size: 22px; font-weight: 500; margin-bottom: 16px; color: #1f2937;
-    padding-bottom: 12px; border-bottom: 1px solid #e5e7eb;
-  }
   #read-view .read-content { line-height: 1.7; color: #374151; }
   #read-view .read-content img { max-width: 100%; height: auto; }
   #read-view .read-content table { border-collapse: collapse; width: 100%; margin: 12px 0; }
@@ -694,9 +690,6 @@ async function renameNode(node) {
     // 如果当前正在编辑/查看这个文档，同步更新标题
     if (currentDocId === node.id) {
       document.getElementById('doc-title').value = trimmed;
-      if (!isLoggedIn) {
-        document.getElementById('read-title').textContent = trimmed;
-      }
     }
     await loadTree();
   } else {
