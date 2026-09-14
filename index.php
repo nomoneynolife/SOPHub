@@ -218,7 +218,6 @@ $tinymceUrl = file_exists($tinymceLocalPath)
         <div class="editor-body">
           <!-- 阅读视图（游客用） -->
           <div id="read-view">
-            <div class="read-title" id="read-title"></div>
             <div class="read-content" id="read-content"></div>
           </div>
           <!-- 编辑器（登录用户用） -->
@@ -335,7 +334,6 @@ async function doLogout() {
   if (currentDocId) {
     const r = await api('get', { id: currentDocId }, 'GET');
     if (r.ok) {
-      document.getElementById('read-title').textContent = r.data.title;
       document.getElementById('read-content').innerHTML = r.data.content || '';
     }
   }
@@ -739,7 +737,6 @@ async function selectNode(node) {
     setSaveStatus('');
   } else {
     // 阅读模式：直接渲染 HTML
-    document.getElementById('read-title').textContent = r.data.title || node.title;
     document.getElementById('read-content').innerHTML = content;
     setSaveStatus('');
   }
