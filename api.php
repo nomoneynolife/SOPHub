@@ -55,11 +55,14 @@ function init_db(): PDO {
             content TEXT NOT NULL DEFAULT '',
             sort INTEGER NOT NULL DEFAULT 0,
             is_folder INTEGER NOT NULL DEFAULT 0,
+            expanded INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_docs_parent ON docs(parent_id);
     ");
+    // 兼容旧库：若 expanded 列不存在则补加
+    try { $pdo->exec("ALTER TABLE docs ADD COLUMN expanded INTEGER NOT NULL DEFAULT 0"); } catch (Throwable $e) {}
     return $pdo;
 }
 
@@ -87,6 +90,7 @@ try {
         case 'create': do_create($pdo);
         case 'delete': do_delete($pdo);
         case 'move':   do_move($pdo);
+        case 'reorder': do_reorder($pdo);
         case 'upload': do_upload();
         default:       json_err('未知操作');
     }
@@ -116,7 +120,7 @@ function do_check(): void {
 
 // ========== 列表 ==========
 function do_list(PDO $pdo): void {
-    $rows = $pdo->query("SELECT id, parent_id, title, is_folder, sort, updated_at FROM docs ORDER BY sort, id")->fetchAll();
+    $rows = $pdo->query("SELECT id, parent_id, title, is_folder, expanded, sort, updated_at FROM docs ORDER BY sort, id")->fetchAll();
     json_out(['ok' => true, 'data' => $rows]);
 }
 
@@ -138,6 +142,7 @@ function do_save(PDO $pdo): void {
     $id = get_id();
     $title = input('title');
     $content = input('content');
+    $expanded = input('expanded');
 
     // 允许只更新其中一项
     $fields = [];
@@ -149,6 +154,10 @@ function do_save(PDO $pdo): void {
     if ($content !== null) {
         $fields[] = 'content = ?';
         $params[] = $content;
+    }
+    if ($expanded !== null) {
+        $fields[] = 'expanded = ?';
+        $params[] = $expanded ? 1 : 0;
     }
     if (empty($fields)) {
         json_err('没有要更新的字段');
@@ -249,6 +258,30 @@ function do_move(PDO $pdo): void {
     $params[] = $id;
     $stmt = $pdo->prepare("UPDATE docs SET " . implode(', ', $fields) . " WHERE id = ?");
     $stmt->execute($params);
+    json_out(['ok' => true]);
+}
+
+// ========== 批量重排（拖拽后调用） ==========
+function do_reorder(PDO $pdo): void {
+    require_login();
+    $items = input('items');
+    if ($items === null) json_err('参数 items 缺失');
+    $items = json_decode($items, true);
+    if (!is_array($items) || empty($items)) json_err('参数格式错误');
+
+    $pdo->beginTransaction();
+    try {
+        $stmt = $pdo->prepare("UPDATE docs SET parent_id = ?, sort = ?, updated_at = ? WHERE id = ?");
+        $now = date('Y-m-d H:i:s');
+        foreach ($items as $i => $item) {
+            if (!isset($item['id'], $item['parent_id'])) continue;
+            $stmt->execute([(int)$item['parent_id'], (int)$i, $now, (int)$item['id']]);
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        json_err('重排失败: ' . $e->getMessage());
+    }
     json_out(['ok' => true]);
 }
 

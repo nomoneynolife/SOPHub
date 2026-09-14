@@ -87,10 +87,18 @@ $tinymceUrl = file_exists($tinymceLocalPath)
   }
   .tree-node .tree-btn.edit { color: #4f46e5; }
   .tree-node .tree-btn.danger { color: #dc2626; }
+  .tree-node .tree-btn.expand-toggle { opacity: 1; font-size: 11px; } /* 默认展开按钮常驻显示 */
+  .tree-node .tree-btn.expand-toggle.on { opacity: 1; }
   .tree-node:hover .tree-btn { opacity: 1; }
   body:not(.authed) .tree-node .tree-btn { display: none; }
   .tree-children { margin-left: 18px; display: block; }
   .tree-node-wrapper { display: block; }
+
+  /* 拖拽指示器 */
+  .tree-node.dragging { opacity: 0.4; }
+  .tree-node.drag-over-before { box-shadow: inset 0 2px 0 0 #4f46e5; background: #e0e7ff; }
+  .tree-node.drag-over-after  { box-shadow: inset 0 -2px 0 0 #4f46e5; background: #e0e7ff; }
+  .tree-node.drag-over-in     { box-shadow: inset 0 0 0 2px #10b981; background: #d1fae5; }
 
   /* 主区域 */
   .main {
@@ -235,7 +243,7 @@ $tinymceUrl = file_exists($tinymceLocalPath)
 /* ========== 全局状态 ========== */
 let isLoggedIn = false;
 let currentDocId = null;
-let currentDocTitle = '';
+let draggedNode = null;  // 拖拽中的节点let currentDocTitle = '';
 let editor = null;
 let treeData = [];
 
@@ -379,6 +387,52 @@ function renderNode(node) {
     selectNode(node);
   };
 
+  // 拖拽（仅登录用户）
+  if (isLoggedIn) {
+    div.draggable = true;
+    div.addEventListener('dragstart', (e) => {
+      draggedNode = node;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(node.id));
+      div.classList.add('dragging');
+    });
+    div.addEventListener('dragend', () => {
+      div.classList.remove('dragging');
+      document.querySelectorAll('.drag-over-before,.drag-over-after,.drag-over-in')
+        .forEach(el => el.classList.remove('drag-over-before','drag-over-after','drag-over-in'));
+      draggedNode = null;
+    });
+    div.addEventListener('dragover', (e) => {
+      if (!draggedNode || draggedNode.id === node.id) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const rect = div.getBoundingClientRect();
+      const offset = (e.clientY - rect.top) / rect.height;
+      // 清除之前的指示
+      ['drag-over-before','drag-over-after','drag-over-in'].forEach(c => div.classList.remove(c));
+      if (node.is_folder == 1 && offset > 0.35 && offset < 0.65) {
+        div.classList.add('drag-over-in');
+      } else if (offset < 0.5) {
+        div.classList.add('drag-over-before');
+      } else {
+        div.classList.add('drag-over-after');
+      }
+    });
+    div.addEventListener('dragleave', () => {
+      ['drag-over-before','drag-over-after','drag-over-in'].forEach(c => div.classList.remove(c));
+    });
+    div.addEventListener('drop', async (e) => {
+      if (!draggedNode || draggedNode.id === node.id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = div.getBoundingClientRect();
+      const offset = (e.clientY - rect.top) / rect.height;
+      ['drag-over-before','drag-over-after','drag-over-in'].forEach(c => div.classList.remove(c));
+      await handleDrop(draggedNode, node, offset);
+      draggedNode = null;
+    });
+  }
+
   const icon = document.createElement('span');
   icon.className = 'icon';
   icon.textContent = node.is_folder == 1 ? '📁' : '📄';
@@ -424,7 +478,7 @@ function renderNode(node) {
   };
   div.appendChild(del);
 
-  // 文件夹：在标题行加 + 按钮，并附加独立的子节点容器
+  // 文件夹：在标题行加 + 按钮和"默认展开"切换按钮，并附加独立的子节点容器
   let childContainer = null;
   if (node.is_folder == 1) {
     // + 新建按钮（在标题行里）
@@ -438,13 +492,43 @@ function renderNode(node) {
     };
     div.appendChild(addBtn);
 
+    // 默认展开切换按钮（仅登录用户）
+    // ☑ = 当前已设为"默认展开"，☐ = 默认折叠
+    const expandBtn = document.createElement('button');
+    expandBtn.className = 'tree-btn auth-only expand-toggle' + (node.expanded == 1 ? ' on' : '');
+    expandBtn.innerHTML = node.expanded == 1 ? '☑' : '☐';
+    expandBtn.title = node.expanded == 1 ? '已设为默认展开，点击取消' : '设为默认展开';
+    expandBtn.style.color = node.expanded == 1 ? '#10b981' : '#9ca3af';
+    expandBtn.onclick = async (e) => {
+      e.stopPropagation();
+      if (!isLoggedIn) { showLoginModal(); return; }
+      const newVal = node.expanded == 1 ? 0 : 1;
+      const r = await api('save', { id: node.id, expanded: newVal });
+      if (r.ok) {
+        node.expanded = newVal;
+        expandBtn.innerHTML = newVal ? '☑' : '☐';
+        expandBtn.title = newVal ? '已设为默认展开，点击取消' : '设为默认展开';
+        expandBtn.style.color = newVal ? '#10b981' : '#9ca3af';
+        // 同步当前显示状态到新设置的值
+        if (childContainer) {
+          childContainer.style.display = newVal ? 'block' : 'none';
+          icon.textContent = newVal ? '📁' : '📂';
+        }
+      } else {
+        alert(r.msg || '设置失败');
+      }
+    };
+    div.appendChild(expandBtn);
+
     // 点击文件夹标题行：折叠/展开（覆盖上面的 selectNode）
+    // 仅影响当前会话的显示状态，不影响"默认展开"设置
     div.onclick = (e) => {
       if (e.target.closest('.tree-btn')) return;
       e.stopPropagation();
       if (childContainer) {
-        childContainer.style.display = childContainer.style.display === 'none' ? 'block' : 'none';
-        icon.textContent = childContainer.style.display === 'none' ? '📂' : '📁';
+        const willHide = childContainer.style.display !== 'none';
+        childContainer.style.display = willHide ? 'none' : 'block';
+        icon.textContent = willHide ? '📂' : '📁';
       }
     };
   }
@@ -455,6 +539,14 @@ function renderNode(node) {
   if (node.is_folder == 1) {
     childContainer = document.createElement('div');
     childContainer.className = 'tree-children';
+    // 默认折叠，仅当 expanded=1 时展开
+    const isExpanded = node.expanded == 1;
+    childContainer.style.display = isExpanded ? 'block' : 'none';
+    if (isExpanded) {
+      icon.textContent = '📁';
+    } else {
+      icon.textContent = '📂';
+    }
     if (node.children.length) {
       node.children.forEach(c => childContainer.appendChild(renderNode(c)));
     }
