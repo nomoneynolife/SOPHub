@@ -57,6 +57,11 @@ $tinymceUrl = file_exists($tinymceLocalPath)
   body.authed .auth-only { display: inline-flex; align-items: center; }
   .guest-only { display: inline-flex; align-items: center; }
   body.authed .guest-only { display: none; }
+  /* 编辑模式才显示 */
+  .editing-only { display: none !important; }
+  body.editing .editing-only { display: inline-flex !important; align-items: center; }
+  /* 非编辑模式才显示（已登录但未编辑） */
+  body.editing .not-editing { display: none !important; }
 
   .body { flex: 1; display: flex; min-height: 0; }
 
@@ -143,8 +148,10 @@ $tinymceUrl = file_exists($tinymceLocalPath)
   #read-view .read-content th, #read-view .read-content td { border: 1px solid #d1d5db; padding: 6px 10px; }
   #read-view .read-content code { background: #f3f4f6; padding: 2px 4px; border-radius: 3px; font-size: 13px; }
   #read-view .read-content pre { background: #f3f4f6; padding: 12px; border-radius: 4px; overflow-x: auto; margin: 12px 0; }
-  body:not(.authed) #read-view { display: block; }
-  body:not(.authed) #editor { display: none; }
+  body:not(.editing) #read-view { display: block; }
+  body.editing #read-view { display: none; }
+  body:not(.editing) #editor { display: none; }
+  body.editing #editor { display: block; }
 
   /* TinyMCE 容器 */
   #editor { width: 100%; height: 100%; }
@@ -191,7 +198,7 @@ $tinymceUrl = file_exists($tinymceLocalPath)
     </h1>
     <div class="actions">
       <span id="save-status" class="save-status auth-only"></span>
-      <button class="btn btn-primary auth-only" onclick="saveDoc()" title="保存 (Ctrl+S)">保存</button>
+      <button class="btn btn-primary editing-only" onclick="saveDoc()" title="保存 (Ctrl+S)">保存</button>
       <button id="login-btn" class="btn btn-primary guest-only" onclick="showLoginModal()">登录</button>
       <button id="logout-btn" class="btn auth-only" onclick="doLogout()">退出登录</button>
     </div>
@@ -209,6 +216,8 @@ $tinymceUrl = file_exists($tinymceLocalPath)
       <div id="editor-area" style="display:none;">
         <div class="editor-header">
           <input type="text" id="doc-title" placeholder="文档标题" readonly>
+          <button id="btn-edit" class="btn-icon auth-only not-editing" title="进入编辑模式" onclick="enterEditMode()">✎</button>
+          <button id="btn-exit-edit" class="btn-icon editing-only" title="退出编辑模式" onclick="exitEditMode()">📖</button>
           <button id="btn-copy-link" class="btn-icon" title="复制此文档的链接" onclick="copyCurrentLink()">🔗</button>
         </div>
         <div class="editor-body">
@@ -245,6 +254,7 @@ $tinymceUrl = file_exists($tinymceLocalPath)
 <script>
 /* ========== 全局状态 ========== */
 let isLoggedIn = false;
+let isEditing = false;   // 是否进入编辑模式（登录后默认 false，需点编辑按钮才 true）
 let currentDocId = null;
 let draggedNode = null;  // 拖拽中的节点
 let currentDocTitle = '';
@@ -274,11 +284,13 @@ function setSaveStatus(msg) {
 
 function updateAuthUI() {
   document.body.classList.toggle('authed', isLoggedIn);
+  // editing 类只在 isEditing && isLoggedIn 时启用
+  document.body.classList.toggle('editing', isEditing && isLoggedIn);
   document.getElementById('user-status').textContent = isLoggedIn
-    ? '已登录 · 可编辑'
+    ? (isEditing ? '编辑模式' : '已登录 · 阅读模式')
     : '游客模式 · 仅查看';
-  // 标题输入框：登录时可编辑
-  document.getElementById('doc-title').readOnly = !isLoggedIn;
+  // 标题输入框：仅在编辑模式可写
+  document.getElementById('doc-title').readOnly = !(isEditing && isLoggedIn);
 }
 
 /* ========== 登录弹窗 ========== */
@@ -300,16 +312,15 @@ async function doLogin() {
   const r = await api('login', { password: pwd });
   if (r.ok) {
     isLoggedIn = true;
+    isEditing = false;  // 登录后默认阅读模式
     updateAuthUI();
     hideLoginModal();
-    // 切换到编辑模式：初始化编辑器，把当前文档内容塞进去
-    await initEditor();
+    // 重新加载当前文档到阅读视图
     if (currentDocId) {
-      // 重新加载当前文档到编辑器
       const r2 = await api('get', { id: currentDocId }, 'GET');
-      if (r2.ok && editor) {
-        editor.setContent(r2.data.content || '');
+      if (r2.ok) {
         document.getElementById('doc-title').value = r2.data.title || '';
+        document.getElementById('read-content').innerHTML = r2.data.content || '';
       }
     }
   } else {
@@ -317,23 +328,59 @@ async function doLogin() {
   }
 }
 
-async function doLogout() {
-  await api('logout');
-  isLoggedIn = false;
+/* 进入编辑模式 */
+async function enterEditMode() {
+  if (!isLoggedIn) { showLoginModal(); return; }
+  if (isEditing) return;  // 已在编辑模式
+  if (!currentDocId) { alert('请先选择一个文档'); return; }
+
+  setSaveStatus('加载编辑器...');
+  await initEditor();
+  isEditing = true;
   updateAuthUI();
-  // 销毁编辑器，切回阅读视图
+
+  // 把当前文档内容塞到编辑器
+  if (editor) {
+    const r = await api('get', { id: currentDocId }, 'GET');
+    if (r.ok) {
+      editor.setContent(r.data.content || '');
+      document.getElementById('doc-title').value = r.data.title || '';
+    }
+  }
+  setSaveStatus('');
+}
+
+/* 退出编辑模式（不退出登录） */
+function exitEditMode() {
+  if (!isEditing) return;
+  isEditing = false;
   if (editor) {
     editor.remove();
     editor = null;
   }
-  // 重新渲染当前文档（如果有的话）
+  updateAuthUI();
+  // 重新渲染当前文档到阅读视图
+  if (currentDocId) {
+    selectNode({ id: currentDocId, title: currentDocTitle, is_folder: 0 });
+  }
+}
+
+async function doLogout() {
+  await api('logout');
+  isLoggedIn = false;
+  isEditing = false;
+  if (editor) {
+    editor.remove();
+    editor = null;
+  }
+  updateAuthUI();
+  // 重新渲染当前文档到阅读视图
   if (currentDocId) {
     const r = await api('get', { id: currentDocId }, 'GET');
     if (r.ok) {
       document.getElementById('read-content').innerHTML = r.data.content || '';
     }
   }
-  // 重新加载树（隐藏删除按钮等）
   loadTree();
 }
 
@@ -724,7 +771,7 @@ async function selectNode(node) {
   }
   const content = r.data.content || '';
 
-  if (isLoggedIn && editor) {
+  if (isEditing && editor) {
     // 编辑模式：写入编辑器
     editor.setContent(content);
     setSaveStatus('');
@@ -922,8 +969,8 @@ document.addEventListener('keydown', (e) => {
     const r = await api('check', {}, 'GET');
     if (r.ok && r.logged_in) {
       isLoggedIn = true;
+      // 登录态默认阅读模式，编辑器按需初始化
       updateAuthUI();
-      await initEditor();
     } else {
       updateAuthUI();
     }
