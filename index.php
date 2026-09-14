@@ -185,6 +185,72 @@ $tinymceUrl = file_exists($tinymceLocalPath)
     width: auto; padding: 0;
   }
   #login-box .close-btn:hover { color: #4b5563; background: none; }
+
+  /* ========== 现代化弹窗 ========== */
+  #modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, .45);
+    z-index: 2000; align-items: center; justify-content: center;
+    backdrop-filter: blur(2px);
+    animation: modalFadeIn .18s ease-out;
+  }
+  #modal-overlay.show { display: flex; }
+  @keyframes modalFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes modalSlideIn {
+    from { opacity: 0; transform: translateY(-10px) scale(.96); }
+    to   { opacity: 1; transform: translateY(0)    scale(1); }
+  }
+  #modal-box {
+    background: #fff; border-radius: 12px; padding: 28px 32px 24px;
+    width: 400px; max-width: calc(100vw - 32px);
+    box-shadow: 0 20px 60px rgba(15, 23, 42, .25), 0 0 0 1px rgba(15, 23, 42, .04);
+    animation: modalSlideIn .22s cubic-bezier(.16, 1, .3, 1);
+    text-align: center;
+  }
+  #modal-icon {
+    width: 56px; height: 56px; margin: 0 auto 14px;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 26px;
+  }
+  #modal-icon.danger  { background: #fef2f2; color: #dc2626; }
+  #modal-icon.warning { background: #fffbeb; color: #d97706; }
+  #modal-icon.info    { background: #eff6ff; color: #2563eb; }
+  #modal-icon.success { background: #ecfdf5; color: #10b981; }
+  #modal-title {
+    font-size: 17px; font-weight: 600; color: #111827; margin-bottom: 6px;
+  }
+  #modal-message {
+    font-size: 14px; color: #6b7280; line-height: 1.6; margin-bottom: 20px;
+    white-space: pre-wrap;
+  }
+  #modal-input-wrap { display: none; margin-bottom: 20px; }
+  #modal-input-wrap.show { display: block; }
+  #modal-input {
+    width: 100%; padding: 9px 12px; border: 1px solid #d1d5db;
+    border-radius: 6px; font-size: 14px; outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  #modal-input:focus {
+    border-color: #4f46e5;
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, .15);
+  }
+  #modal-actions { display: flex; gap: 10px; justify-content: center; }
+  #modal-actions button {
+    min-width: 96px; padding: 9px 18px; border-radius: 6px;
+    font-size: 14px; font-weight: 500; cursor: pointer;
+    border: 1px solid transparent; transition: all .15s;
+  }
+  #modal-actions .btn-cancel {
+    background: #fff; color: #374151; border-color: #d1d5db;
+  }
+  #modal-actions .btn-cancel:hover { background: #f9fafb; border-color: #9ca3af; }
+  #modal-actions .btn-danger {
+    background: #dc2626; color: #fff;
+  }
+  #modal-actions .btn-danger:hover { background: #b91c1c; }
+  #modal-actions .btn-primary {
+    background: #4f46e5; color: #fff;
+  }
+  #modal-actions .btn-primary:hover { background: #4338ca; }
 </style>
 </head>
 <body>
@@ -194,7 +260,7 @@ $tinymceUrl = file_exists($tinymceLocalPath)
   <div class="topbar">
     <h1>
       SOPHub <span class="subtitle">· SOP 文档中心</span>
-      <span id="user-status" class="subtitle">游客模式 · 仅查看</span>
+      <span id="user-status" class="subtitle">预览模式 · 仅查看</span>
     </h1>
     <div class="actions">
       <span id="save-status" class="save-status auth-only"></span>
@@ -251,6 +317,17 @@ $tinymceUrl = file_exists($tinymceLocalPath)
   </div>
 </div>
 
+<!-- 现代化弹窗容器（confirm / alert / prompt 共用） -->
+<div id="modal-overlay">
+  <div id="modal-box">
+    <div id="modal-icon"></div>
+    <div id="modal-title"></div>
+    <div id="modal-message"></div>
+    <div id="modal-input-wrap"><input type="text" id="modal-input"></div>
+    <div id="modal-actions"></div>
+  </div>
+</div>
+
 <script>
 /* ========== 全局状态 ========== */
 let isLoggedIn = false;
@@ -278,6 +355,88 @@ async function api(action, params = {}, method = 'POST') {
   return res.json();
 }
 
+/* ========== 现代化弹窗（替代原生 alert/confirm/prompt） ========== */
+// type: 'danger' | 'warning' | 'info' | 'success'
+// 返回 Promise：confirm/prompt → true/false（prompt 失败返回 false，成功返回字符串）
+//              alert → 无返回
+function showModal({ title = '', message = '', type = 'info', input = null, inputDefault = '', confirmText = '确定', confirmClass = 'btn-primary', cancelText = '取消' }) {
+  return new Promise(resolve => {
+    const overlay = document.getElementById('modal-overlay');
+    const iconEl = document.getElementById('modal-icon');
+    const titleEl = document.getElementById('modal-title');
+    const msgEl = document.getElementById('modal-message');
+    const inputWrap = document.getElementById('modal-input-wrap');
+    const inputEl = document.getElementById('modal-input');
+    const actions = document.getElementById('modal-actions');
+
+    const icons = { danger: '⚠', warning: '⚠', info: 'ℹ', success: '✓' };
+    iconEl.textContent = icons[type] || icons.info;
+    iconEl.className = type;
+    titleEl.textContent = title;
+    msgEl.textContent = message;
+
+    if (input) {
+      inputWrap.classList.add('show');
+      inputEl.value = inputDefault;
+      inputEl.placeholder = input;
+      setTimeout(() => inputEl.focus(), 50);
+    } else {
+      inputWrap.classList.remove('show');
+    }
+
+    actions.innerHTML = '';
+
+    // 取消按钮（confirm/prompt 才显示）
+    if (input !== null || confirmText && cancelText) {
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn-cancel';
+      cancelBtn.textContent = cancelText;
+      cancelBtn.onclick = () => { close(); resolve(input !== null ? false : false); };
+      actions.appendChild(cancelBtn);
+    }
+
+    // 确定按钮
+    const okBtn = document.createElement('button');
+    okBtn.className = confirmClass;
+    okBtn.textContent = confirmText;
+    okBtn.onclick = () => {
+      if (input !== null) {
+        const val = inputEl.value;
+        close();
+        resolve(val);  // 返回用户输入
+      } else {
+        close();
+        resolve(true);
+      }
+    };
+    actions.appendChild(okBtn);
+
+    function close() {
+      overlay.classList.remove('show');
+      document.removeEventListener('keydown', keyHandler);
+    }
+    function keyHandler(e) {
+      if (e.key === 'Escape') { close(); resolve(false); }
+      else if (e.key === 'Enter' && input !== null) { okBtn.click(); }
+      else if (e.key === 'Enter' && input === null) { close(); resolve(true); }
+    }
+    document.addEventListener('keydown', keyHandler);
+
+    overlay.classList.add('show');
+  });
+}
+
+// 便捷封装
+function modalAlert(message, title = '提示', type = 'info') {
+  return showModal({ title, message, type, confirmText: '确定', cancelText: '' });
+}
+function modalConfirm(message, title = '请确认', type = 'warning') {
+  return showModal({ title, message, type, confirmText: '确定', cancelText: '取消' });
+}
+function modalPrompt(message, defaultVal = '', title = '请输入') {
+  return showModal({ title, message, input: '请输入内容', inputDefault: defaultVal, confirmText: '确定', cancelText: '取消' });
+}
+
 function setSaveStatus(msg) {
   document.getElementById('save-status').textContent = msg;
 }
@@ -288,7 +447,7 @@ function updateAuthUI() {
   document.body.classList.toggle('editing', isEditing && isLoggedIn);
   document.getElementById('user-status').textContent = isLoggedIn
     ? (isEditing ? '编辑模式' : '已登录 · 阅读模式')
-    : '游客模式 · 仅查看';
+    : '预览模式 · 仅查看';
   // 标题输入框：仅在编辑模式可写
   document.getElementById('doc-title').readOnly = !(isEditing && isLoggedIn);
 }
@@ -332,7 +491,7 @@ async function doLogin() {
 async function enterEditMode() {
   if (!isLoggedIn) { showLoginModal(); return; }
   if (isEditing) return;  // 已在编辑模式
-  if (!currentDocId) { alert('请先选择一个文档'); return; }
+  if (!currentDocId) { modalAlert('请先选择一个文档', '提示', 'warning'); return; }
 
   setSaveStatus('加载编辑器...');
   await initEditor();
@@ -513,7 +672,8 @@ function renderNode(node) {
   del.title = '删除';
   del.onclick = async (e) => {
     e.stopPropagation();
-    if (!confirm(`确认删除「${node.title}」及其所有子内容？此操作不可恢复。`)) return;
+    const confirmed = await modalConfirm(`确认删除「${node.title}」及其所有子内容？此操作不可恢复。`, '删除确认', 'danger');
+    if (!confirmed) return;
     const r = await api('delete', { id: node.id }, 'GET');
     if (r.ok) {
       if (currentDocId === node.id) {
@@ -523,7 +683,7 @@ function renderNode(node) {
       }
       loadTree();
     } else {
-      alert(r.msg || '删除失败');
+      modalAlert(r.msg || '删除失败', '删除失败', 'danger');
     }
   };
   div.appendChild(del);
@@ -565,7 +725,7 @@ function renderNode(node) {
           icon.textContent = newVal ? '📁' : '📂';
         }
       } else {
-        alert(r.msg || '设置失败');
+        modalAlert(r.msg || '设置失败', '设置失败', 'danger');
       }
     };
     div.appendChild(expandBtn);
@@ -620,7 +780,7 @@ async function handleDrop(draggedNode, targetNode, offset) {
   // 防止把文件夹拖入自己的子孙（避免循环）
   if (targetNode.is_folder == 1 && offset > 0.35 && offset < 0.65) {
     if (isDescendant(targetNode, draggedNode)) {
-      alert('不能把文件夹拖入自己的子文件夹');
+      modalAlert('不能把文件夹拖入自己的子文件夹', '操作无效', 'warning');
       return;
     }
     // 移入文件夹：新 parent = targetNode.id，放最后
@@ -635,7 +795,7 @@ async function handleDrop(draggedNode, targetNode, offset) {
     const newParentId = targetNode.parent_id;
     // 防止拖入自己的子孙文件夹
     if (isDescendant(targetNode, draggedNode)) {
-      alert('不能移动到自己的子项中');
+      modalAlert('不能移动到自己的子项中', '操作无效', 'warning');
       return;
     }
     const siblings = getSiblings(newParentId);
@@ -683,31 +843,42 @@ async function submitReorder(items, parentId) {
   if (r.ok) {
     await loadTree();
   } else {
-    alert(r.msg || '排序失败');
+    modalAlert(r.msg || '排序失败', '排序失败', 'danger');
   }
 }
 
 async function addMenu(parentId) {
   if (!isLoggedIn) { showLoginModal(); return; }
-  const type = prompt('新建：1=文档，2=文件夹', '1');
-  if (type === null) return;
-  if (type === '1') {
-    const title = prompt('文档标题：', '新文档');
+  // 选择新建类型：文档 / 文件夹
+  const choice = await showModal({
+    title: '新建',
+    message: '请选择要创建的类型：',
+    type: 'info',
+    confirmText: '文档',
+    confirmClass: 'btn-primary',
+    cancelText: '文件夹'
+  });
+  if (choice === true) {
+    // 用户选"文档"
+    const title = await modalPrompt('请输入文档标题：', '新文档', '新建文档');
     if (!title) return;
     await createNode(parentId, 0, title);
-  } else if (type === '2') {
-    const title = prompt('文件夹名称：', '新文件夹');
+  } else {
+    // 用户选"文件夹"
+    const title = await modalPrompt('请输入文件夹名称：', '新文件夹', '新建文件夹');
     if (!title) return;
     await createNode(parentId, 1, title);
-  } else {
-    alert('请输入 1 或 2');
   }
 }
 
 async function createNode(parentId, isFolder = 0, title = null) {
   if (!isLoggedIn) { showLoginModal(); return; }
   if (!title) {
-    title = prompt(isFolder ? '文件夹名称：' : '文档标题：', isFolder ? '新文件夹' : '新文档');
+    title = await modalPrompt(
+      isFolder ? '请输入文件夹名称：' : '请输入文档标题：',
+      isFolder ? '新文件夹' : '新文档',
+      isFolder ? '新建文件夹' : '新建文档'
+    );
     if (!title) return;
   }
   const r = await api('create', { parent_id: parentId, title, is_folder: isFolder });
@@ -715,7 +886,7 @@ async function createNode(parentId, isFolder = 0, title = null) {
     await loadTree();
     if (!isFolder) selectNode({ id: r.id, title, is_folder: 0 });
   } else {
-    alert(r.msg || '创建失败');
+    modalAlert(r.msg || '创建失败', '创建失败', 'danger');
   }
 }
 
@@ -726,10 +897,10 @@ function createDocInRoot() {
 // 重命名节点
 async function renameNode(node) {
   if (!isLoggedIn) { showLoginModal(); return; }
-  const newTitle = prompt('请输入新名称：', node.title);
-  if (newTitle === null) return; // 用户取消
+  const newTitle = await modalPrompt('请输入新名称：', node.title, '重命名');
+  if (newTitle === false) return; // 用户取消
   const trimmed = newTitle.trim();
-  if (!trimmed) { alert('名称不能为空'); return; }
+  if (!trimmed) { modalAlert('名称不能为空', '提示', 'warning'); return; }
   if (trimmed === node.title) return; // 没变
 
   const r = await api('save', { id: node.id, title: trimmed });
@@ -740,7 +911,7 @@ async function renameNode(node) {
     }
     await loadTree();
   } else {
-    alert(r.msg || '重命名失败');
+    modalAlert(r.msg || '重命名失败', '重命名失败', 'danger');
   }
 }
 
@@ -766,7 +937,7 @@ async function selectNode(node) {
   // 获取完整内容
   const r = await api('get', { id: node.id }, 'GET');
   if (!r.ok) {
-    alert(r.msg);
+    modalAlert(r.msg, '加载失败', 'danger');
     return;
   }
   const content = r.data.content || '';
@@ -821,7 +992,7 @@ function findAncestors(nodes, id, ancestors = []) {
 // 复制当前文档链接到剪贴板
 async function copyCurrentLink() {
   if (!currentDocId) {
-    alert('请先选择一个文档');
+    modalAlert('请先选择一个文档', '提示', 'warning');
     return;
   }
   const url = `${location.origin}${location.pathname}?id=${currentDocId}`;
@@ -844,7 +1015,7 @@ async function copyCurrentLink() {
     input.select();
     document.execCommand('copy');
     document.body.removeChild(input);
-    alert('链接已复制: ' + url);
+    modalAlert('链接已复制: ' + url, '复制成功', 'success');
   }
 }
 
@@ -947,7 +1118,7 @@ async function saveDoc() {
       updateAuthUI();
       showLoginModal();
     } else {
-      alert(r.msg || '保存失败');
+      modalAlert(r.msg || '保存失败', '保存失败', 'danger');
     }
   }
 }
