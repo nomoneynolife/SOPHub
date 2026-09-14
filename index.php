@@ -89,7 +89,8 @@ $tinymceUrl = file_exists($tinymceLocalPath)
   .tree-node .tree-btn.danger { color: #dc2626; }
   .tree-node:hover .tree-btn { opacity: 1; }
   body:not(.authed) .tree-node .tree-btn { display: none; }
-  .tree-children { margin-left: 18px; }
+  .tree-children { margin-left: 18px; display: block; }
+  .tree-node-wrapper { display: block; }
 
   /* 主区域 */
   .main {
@@ -366,6 +367,11 @@ function renderTree() {
 }
 
 function renderNode(node) {
+  // 外层 wrapper：包含标题行 + 子节点容器（独立块级元素）
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tree-node-wrapper';
+
+  // 标题行：flex 横排 [图标][标题][按钮们]
   const div = document.createElement('div');
   div.className = 'tree-node' + (currentDocId === node.id ? ' active' : '');
   div.onclick = (e) => {
@@ -418,25 +424,10 @@ function renderNode(node) {
   };
   div.appendChild(del);
 
-  // 文件夹：渲染子节点容器 + 折叠 + 新建按钮
+  // 文件夹：在标题行加 + 按钮，并附加独立的子节点容器
+  let childContainer = null;
   if (node.is_folder == 1) {
-    const childContainer = document.createElement('div');
-    childContainer.className = 'tree-children';
-    if (node.children.length) {
-      node.children.forEach(c => childContainer.appendChild(renderNode(c)));
-    }
-    div.appendChild(childContainer);
-
-    // 点击文件夹标题行：折叠/展开
-    div.onclick = (e) => {
-      // 避免点击按钮时触发折叠
-      if (e.target.closest('.tree-btn')) return;
-      e.stopPropagation();
-      childContainer.style.display = childContainer.style.display === 'none' ? 'block' : 'none';
-      icon.textContent = childContainer.style.display === 'none' ? '📂' : '📁';
-    };
-
-    // 文件夹"+ 新建"按钮（仅登录用户）
+    // + 新建按钮（在标题行里）
     const addBtn = document.createElement('button');
     addBtn.className = 'tree-btn auth-only edit';
     addBtn.textContent = '+';
@@ -446,9 +437,31 @@ function renderNode(node) {
       addMenu(node.id);
     };
     div.appendChild(addBtn);
+
+    // 点击文件夹标题行：折叠/展开（覆盖上面的 selectNode）
+    div.onclick = (e) => {
+      if (e.target.closest('.tree-btn')) return;
+      e.stopPropagation();
+      if (childContainer) {
+        childContainer.style.display = childContainer.style.display === 'none' ? 'block' : 'none';
+        icon.textContent = childContainer.style.display === 'none' ? '📂' : '📁';
+      }
+    };
   }
 
-  return div;
+  wrapper.appendChild(div);
+
+  // 子节点容器：作为 wrapper 的兄弟元素，独立块级，缩进显示
+  if (node.is_folder == 1) {
+    childContainer = document.createElement('div');
+    childContainer.className = 'tree-children';
+    if (node.children.length) {
+      node.children.forEach(c => childContainer.appendChild(renderNode(c)));
+    }
+    wrapper.appendChild(childContainer);
+  }
+
+  return wrapper;
 }
 
 // 文件夹内新建（弹出选择）
