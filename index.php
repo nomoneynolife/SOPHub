@@ -215,7 +215,7 @@ $tinymceUrl = file_exists($tinymceLocalPath)
     </main>
   </div>
   <footer class="app-footer">
-    <span id="footer-text">© <?= date('Y') ?> SOPHub · by_sw</span>
+    <span id="footer-text">© <?= date('Y') ?> <a href="https://github.com/nomoneynolife/SOPHub" target="_blank" rel="noopener">SOPHub</a> · by_sw</span>
   </footer>
 </div>
 
