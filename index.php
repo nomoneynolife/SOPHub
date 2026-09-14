@@ -114,6 +114,11 @@ $tinymceUrl = file_exists($tinymceLocalPath)
     font-size: 14px;
   }
   .editor-header input:focus { outline: none; border-color: #4f46e5; }
+  .editor-header .btn-icon {
+    flex-shrink: 0; padding: 6px 10px; font-size: 16px; line-height: 1;
+    background: none; border: 1px solid #ddd; border-radius: 4px; cursor: pointer;
+  }
+  .editor-header .btn-icon:hover { background: #f3f4f6; border-color: #4f46e5; }
   /* 游客态下标题输入框只读 */
   body:not(.authed) .editor-header input { background: #f9fafb; color: #374151; cursor: default; }
   .editor-body { flex: 1; overflow: hidden; position: relative; min-height: 0; }
@@ -206,6 +211,7 @@ $tinymceUrl = file_exists($tinymceLocalPath)
       <div id="editor-area" style="display:none;">
         <div class="editor-header">
           <input type="text" id="doc-title" placeholder="文档标题" readonly>
+          <button id="btn-copy-link" class="btn-icon" title="复制此文档的链接" onclick="copyCurrentLink()">🔗</button>
         </div>
         <div class="editor-body">
           <!-- 阅读视图（游客用） -->
@@ -709,6 +715,14 @@ async function selectNode(node) {
   document.getElementById('doc-title').value = node.title;
   setSaveStatus('加载中...');
 
+  // 更新 URL 为固定链接（不刷新页面）
+  const newUrl = `?id=${node.id}`;
+  if (history.state?.id != node.id) {
+    history.replaceState({ id: node.id }, '', newUrl);
+    // 同步页面标题
+    document.title = `${node.title} · SOPHub`;
+  }
+
   // 获取完整内容
   const r = await api('get', { id: node.id }, 'GET');
   if (!r.ok) {
@@ -731,6 +745,85 @@ async function selectNode(node) {
   // 高亮当前节点
   renderTree();
 }
+
+/* ========== URL 路由 ========== */
+// 从 URL ?id=xxx 解析出要打开的文档 id
+function getDocIdFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const id = params.get('id');
+  return id ? parseInt(id, 10) : null;
+}
+
+// 在 treeData 中查找指定 id 的节点
+function findNodeById(nodes, id) {
+  // id 可能是数字或字符串，统一用 == 宽松比较
+  for (const n of nodes) {
+    if (n.id == id) return n;
+    if (n.children && n.children.length) {
+      const found = findNodeById(n.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// 在 treeData 中查找节点的所有祖先（用于自动展开）
+function findAncestors(nodes, id, ancestors = []) {
+  for (const n of nodes) {
+    if (n.id === id) return ancestors;
+    if (n.children && n.children.length) {
+      const result = findAncestors(n.children, id, [...ancestors, n]);
+      if (result) return result;
+    }
+  }
+  return null;
+}
+
+// 复制当前文档链接到剪贴板
+async function copyCurrentLink() {
+  if (!currentDocId) {
+    alert('请先选择一个文档');
+    return;
+  }
+  const url = `${location.origin}${location.pathname}?id=${currentDocId}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    // 临时提示
+    const btn = document.getElementById('btn-copy-link');
+    const origText = btn.textContent;
+    btn.textContent = '✓ 已复制';
+    btn.style.color = '#10b981';
+    setTimeout(() => {
+      btn.textContent = origText;
+      btn.style.color = '';
+    }, 1500);
+  } catch (e) {
+    // 回退方案
+    const input = document.createElement('input');
+    input.value = url;
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand('copy');
+    document.body.removeChild(input);
+    alert('链接已复制: ' + url);
+  }
+}
+
+// 监听浏览器前进/后退
+window.addEventListener('popstate', (e) => {
+  const id = e.state?.id || getDocIdFromUrl();
+  if (id) {
+    const node = findNodeById(treeData, id);
+    if (node) selectNode(node);
+  } else {
+    // 回到首页
+    currentDocId = null;
+    document.getElementById('editor-area').style.display = 'none';
+    document.getElementById('empty-state').style.display = 'flex';
+    document.title = 'SOPHub · SOP 文档中心';
+    renderTree();
+  }
+});
 
 /* ========== 编辑器初始化 ========== */
 async function initEditor() {
@@ -844,6 +937,17 @@ document.addEventListener('keydown', (e) => {
     }
     // 无论登录与否，都加载文档树供查看
     await loadTree();
+    // 检查 URL 中是否指定了文档 id，自动打开
+    const urlId = getDocIdFromUrl();
+    if (urlId) {
+      const node = findNodeById(treeData, urlId);
+      if (node) {
+        await selectNode(node);
+      } else {
+        // 文档不存在，清理 URL
+        history.replaceState(null, '', location.pathname);
+      }
+    }
   } catch (e) {
     console.error('初始化失败:', e);
   }
