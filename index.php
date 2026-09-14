@@ -243,7 +243,8 @@ $tinymceUrl = file_exists($tinymceLocalPath)
 /* ========== 全局状态 ========== */
 let isLoggedIn = false;
 let currentDocId = null;
-let draggedNode = null;  // 拖拽中的节点let currentDocTitle = '';
+let draggedNode = null;  // 拖拽中的节点
+let currentDocTitle = '';
 let editor = null;
 let treeData = [];
 
@@ -556,7 +557,87 @@ function renderNode(node) {
   return wrapper;
 }
 
-// 文件夹内新建（弹出选择）
+/* ========== 拖拽处理 ==========
+ * draggedNode: 被拖动的节点
+ * targetNode: 释放目标节点
+ * offset: 释放位置在目标节点的垂直比例 (0-1)
+ *   < 0.35      → 插入到目标之前（同级）
+ *   > 0.65      → 插入到目标之后（同级）
+ *   0.35-0.65   → 若目标是文件夹，移入文件夹
+ */
+async function handleDrop(draggedNode, targetNode, offset) {
+  if (!draggedNode || !targetNode || draggedNode.id === targetNode.id) return;
+
+  // 防止把文件夹拖入自己的子孙（避免循环）
+  if (targetNode.is_folder == 1 && offset > 0.35 && offset < 0.65) {
+    if (isDescendant(targetNode, draggedNode)) {
+      alert('不能把文件夹拖入自己的子文件夹');
+      return;
+    }
+    // 移入文件夹：新 parent = targetNode.id，放最后
+    const newParentId = targetNode.id;
+    const siblings = getSiblings(newParentId);
+    // 排除被拖动节点（如果它本来就在这个 parent 下）
+    const filtered = siblings.filter(n => n.id !== draggedNode.id);
+    filtered.push(draggedNode);
+    await submitReorder(filtered, newParentId);
+  } else {
+    // 同级插入：新 parent = targetNode.parent_id
+    const newParentId = targetNode.parent_id;
+    // 防止拖入自己的子孙文件夹
+    if (isDescendant(targetNode, draggedNode)) {
+      alert('不能移动到自己的子项中');
+      return;
+    }
+    const siblings = getSiblings(newParentId);
+    const filtered = siblings.filter(n => n.id !== draggedNode.id);
+    // 找到 targetNode 在 filtered 中的位置
+    const targetIdx = filtered.findIndex(n => n.id === targetNode.id);
+    let insertAt;
+    if (offset < 0.5) {
+      insertAt = targetIdx;  // 之前
+    } else {
+      insertAt = targetIdx + 1;  // 之后
+    }
+    filtered.splice(insertAt, 0, draggedNode);
+    await submitReorder(filtered, newParentId);
+  }
+}
+
+// 获取某个 parent 下的所有节点（从 treeData 平铺）
+function getSiblings(parentId) {
+  function walk(nodes) {
+    const result = [];
+    for (const n of nodes) {
+      if (n.parent_id == parentId) result.push(n);
+      if (n.children && n.children.length) result.push(...walk(n.children));
+    }
+    return result;
+  }
+  return walk(treeData);
+}
+
+// 判断 possibleDescendant 是否是 ancestor 的子孙
+function isDescendant(ancestor, possibleDescendant) {
+  if (!ancestor || !ancestor.children) return false;
+  for (const child of ancestor.children) {
+    if (child.id === possibleDescendant.id) return true;
+    if (isDescendant(child, possibleDescendant)) return true;
+  }
+  return false;
+}
+
+// 提交重排：items 是 [{id, parent_id}] 数组，顺序即新 sort
+async function submitReorder(items, parentId) {
+  const payload = items.map(n => ({ id: n.id, parent_id: parentId }));
+  const r = await api('reorder', { items: JSON.stringify(payload) });
+  if (r.ok) {
+    await loadTree();
+  } else {
+    alert(r.msg || '排序失败');
+  }
+}
+
 async function addMenu(parentId) {
   if (!isLoggedIn) { showLoginModal(); return; }
   const type = prompt('新建：1=文档，2=文件夹', '1');
