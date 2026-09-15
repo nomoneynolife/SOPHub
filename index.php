@@ -1339,9 +1339,51 @@ async function initEditor() {
         editor = ed;
         ed.on('init', () => resolve());
         ed.addShortcut('ctrl+s', '保存', saveDoc);
+        // 粘贴后自动下载外链图片到本地
+        ed.on('paste', (e) => {
+          setTimeout(() => fetchRemoteImages(ed), 100);
+        });
       }
     });
   });
+}
+
+/* ========== 粘贴时自动下载外链图片到本地 ========== */
+async function fetchRemoteImages(ed) {
+  const body = ed.getBody();
+  if (!body) return;
+  const imgs = body.querySelectorAll('img[src^="http"]');
+  if (imgs.length === 0) return;
+
+  setSaveStatus(`正在下载 ${imgs.length} 张外链图片...`);
+  const docId = currentDocId || 'temp';
+
+  for (const img of imgs) {
+    const url = img.getAttribute('src');
+    // 跳过已处理的（带 data-fetched 标记）
+    if (img.dataset.fetched) continue;
+    // 跳过本地地址
+    if (url.startsWith('data/uploads') || url.startsWith('data:')) continue;
+
+    try {
+      const res = await fetch(`api.php?action=fetch_url&url=${encodeURIComponent(url)}&doc_id=${docId}`, {
+        credentials: 'same-origin'
+      });
+      const json = await res.json();
+      if (json.ok) {
+        img.setAttribute('src', json.location);
+        img.dataset.fetched = '1';
+      } else {
+        console.warn('下载外链图片失败:', json.msg, url);
+        img.dataset.fetched = '1';  // 标记避免重复尝试
+      }
+    } catch (err) {
+      console.warn('下载外链图片异常:', err, url);
+      img.dataset.fetched = '1';
+    }
+  }
+  setSaveStatus('');
+  scheduleAutoSave();
 }
 
 /* ========== 保存 ========== */
