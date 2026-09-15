@@ -424,8 +424,8 @@ function do_upload(): void {
 function do_fetch_url(): void {
     require_login();
 
-    $url = input('url');
-    $docId = input('doc_id') ?: 'temp';
+    $url = input('url', 'GET');
+    $docId = input('doc_id', 'GET') ?: 'temp';
 
     if (!$url) {
         json_err('缺少 url 参数');

@@ -1317,7 +1317,6 @@ async function initEditor() {
       plugins: 'image lists link table autolink fullscreen searchreplace wordcount',
       toolbar: 'undo redo | bold italic underline strikethrough | forecolor backcolor | h1 h2 h3 h4 | bullist numlist outdent indent | alignleft aligncenter alignright | link image table | removeformat fullscreen',
       paste_data_images: true,
-      paste_retain_style_properties: 'all',
       paste_word_tags: true,
       images_upload_url: 'api.php?action=upload',
       images_upload_credentials: true,
@@ -1339,9 +1338,9 @@ async function initEditor() {
         editor = ed;
         ed.on('init', () => resolve());
         ed.addShortcut('ctrl+s', '保存', saveDoc);
-        // 粘贴后自动下载外链图片到本地
-        ed.on('paste', (e) => {
-          setTimeout(() => fetchRemoteImages(ed), 100);
+        // 粘贴后扫描编辑器里的外链图片，下载到本地并替换 src
+        ed.on('paste', () => {
+          setTimeout(() => fetchRemoteImagesInEditor(ed), 500);
         });
       }
     });
@@ -1349,41 +1348,98 @@ async function initEditor() {
 }
 
 /* ========== 粘贴时自动下载外链图片到本地 ========== */
-async function fetchRemoteImages(ed) {
+
+// URL 映射表：外链URL → 本地路径
+const remoteImgMap = new Map();
+
+// 下载单张外链图片，完成后把映射写入 remoteImgMap
+async function fetchRemoteImgToLocal(imgEl, docId) {
+  const url = imgEl.getAttribute('src');
+  if (!url || !url.startsWith('http')) return;
+  if (url.startsWith('data/uploads') || url.startsWith('data:')) return;
+  if (imgEl.dataset.fetched) return;
+  // 如果已经下载过（映射表里有），直接用映射表替换
+  if (remoteImgMap.has(url)) {
+    imgEl.setAttribute('src', remoteImgMap.get(url));
+    imgEl.dataset.fetched = '1';
+    return;
+  }
+
+  imgEl.dataset.fetched = '1';  // 先标记避免重复请求
+
+  try {
+    const res = await fetch(`api.php?action=fetch_url&url=${encodeURIComponent(url)}&doc_id=${docId}`, {
+      credentials: 'same-origin'
+    });
+    if (!res.ok) {
+      console.warn('[SOPHub] fetch_url HTTP', res.status, 'for', url.substring(0, 80));
+      return;
+    }
+    const json = await res.json();
+    if (json.ok) {
+      console.log('[SOPHub] ✓ 外链已本地化:', url.substring(0, 60), '→', json.location);
+      // 写入映射表
+      remoteImgMap.set(url, json.location);
+      // 改 DOM（虽然 TinyMCE 可能不感知，但至少视觉上是对的）
+      imgEl.setAttribute('src', json.location);
+    } else {
+      console.warn('[SOPHub] ✗ 下载失败:', json.msg, url.substring(0, 80));
+    }
+  } catch (err) {
+    console.warn('[SOPHub] ✗ 下载异常:', err.message, url.substring(0, 80));
+  }
+}
+
+// 扫描编辑器里所有外链图片，下载并替换
+async function fetchRemoteImagesInEditor(ed) {
   const body = ed.getBody();
   if (!body) return;
+
+  // 找所有 src 以 http 开头且还没处理过的 img
+  const pending = [];
   const imgs = body.querySelectorAll('img[src^="http"]');
-  if (imgs.length === 0) return;
-
-  setSaveStatus(`正在下载 ${imgs.length} 张外链图片...`);
-  const docId = currentDocId || 'temp';
-
   for (const img of imgs) {
-    const url = img.getAttribute('src');
-    // 跳过已处理的（带 data-fetched 标记）
-    if (img.dataset.fetched) continue;
-    // 跳过本地地址
-    if (url.startsWith('data/uploads') || url.startsWith('data:')) continue;
-
-    try {
-      const res = await fetch(`api.php?action=fetch_url&url=${encodeURIComponent(url)}&doc_id=${docId}`, {
-        credentials: 'same-origin'
-      });
-      const json = await res.json();
-      if (json.ok) {
-        img.setAttribute('src', json.location);
-        img.dataset.fetched = '1';
-      } else {
-        console.warn('下载外链图片失败:', json.msg, url);
-        img.dataset.fetched = '1';  // 标记避免重复尝试
+    if (!img.dataset.fetched) {
+      const url = img.getAttribute('src');
+      if (!url.startsWith('data/uploads') && !url.startsWith('data:')) {
+        pending.push(img);
       }
-    } catch (err) {
-      console.warn('下载外链图片异常:', err, url);
-      img.dataset.fetched = '1';
     }
   }
+
+  if (pending.length === 0) return;
+
+  console.log(`[SOPHub] 发现 ${pending.length} 张外链图片，开始下载...`);
+  setSaveStatus(`正在下载 ${pending.length} 张外链图片到本地...`);
+
+  const docId = currentDocId || 'temp';
+  // 并发下载
+  await Promise.all(pending.map(img => fetchRemoteImgToLocal(img, docId)));
+
   setSaveStatus('');
+  // 下载完成后自动保存（映射表里有了，saveDoc 会替换）
+  console.log('[SOPHub] 外链图片处理完成，触发自动保存');
   scheduleAutoSave();
+}
+
+// 在 HTML 字符串中替换所有已映射的外链为本地路径
+function applyRemoteImgMap(html) {
+  if (remoteImgMap.size === 0) return html;
+  let result = html;
+  for (const [remoteUrl, localUrl] of remoteImgMap) {
+    // 精确匹配 src="..." 中的 URL（处理可能的引号变体）
+    const escaped = remoteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // 处理 src="url" 和 src='url' 两种情况，以及可能带 &amp; 编码的
+    result = result.replace(new RegExp('src="(' + escaped.replace(/\//g, '\\/') + ')"', 'gi'), 'src="' + localUrl + '"');
+    result = result.replace(new RegExp("src='(" + escaped.replace(/\//g, '\\/') + ")'", 'gi'), "src='" + localUrl + "'");
+    // 处理 &amp; 编码的情况（HTML 里 & 会被转成 &amp;）
+    const encodedUrl = remoteUrl.replace(/&/g, '&amp;');
+    if (encodedUrl !== remoteUrl) {
+      result = result.replace(new RegExp('src="(' + encodedUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\//g, '\\/') + ')"', 'gi'), 'src="' + localUrl + '"');
+      result = result.replace(new RegExp("src='(" + encodedUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\//g, '\\/') + ")'", 'gi'), "src='" + localUrl + "'");
+    }
+  }
+  return result;
 }
 
 /* ========== 保存 ========== */
@@ -1433,7 +1489,9 @@ async function saveDoc() {
   if (!isLoggedIn) { showLoginModal(); return; }
   if (!currentDocId) return;
   const title = document.getElementById('doc-title').value.trim() || '未命名';
-  const content = editor ? editor.getContent() : '';
+  let content = editor ? editor.getContent() : '';
+  // 用映射表替换外链图片为本地路径（TinyMCE 内部缓存可能没同步 DOM 修改）
+  content = applyRemoteImgMap(content);
   setSaveStatus('保存中...');
   const r = await api('save', { id: currentDocId, title, content });
   if (r.ok) {
