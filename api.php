@@ -308,12 +308,45 @@ function do_purge(PDO $pdo): void {
     }
     $toPurge = array_unique($toPurge);
 
-    // 真实删除记录（图片文件保留，避免误删）
+    // 在删除前先收集所有文档引用的本地图片路径
+    $placeholders = implode(',', array_fill(0, count($toPurge), '?'));
+    $stmt = $pdo->prepare("SELECT id, content FROM docs WHERE id IN ($placeholders)");
+    $stmt->execute($toPurge);
+    $docs = $stmt->fetchAll();
+
+    $deletedFiles = 0;
+    foreach ($docs as $doc) {
+        // 找出所有本地图片引用 data/uploads/...
+        preg_match_all('#data/uploads/([\d]+/doc[\d]+/[\w\-\.]+)#', $doc['content'], $matches);
+        foreach ($matches[1] as $relPath) {
+            $absPath = __DIR__ . '/data/uploads/' . $relPath;
+            if (file_exists($absPath)) {
+                @unlink($absPath);
+                $deletedFiles++;
+            }
+        }
+    }
+
+    // 真实删除记录
     $placeholders = implode(',', array_fill(0, count($toPurge), '?'));
     $stmt = $pdo->prepare("DELETE FROM docs WHERE id IN ($placeholders)");
     $stmt->execute($toPurge);
 
-    json_out(['ok' => true, 'purged' => count($toPurge)]);
+    // 清理空的 docID 目录
+    $docDirs = glob(__DIR__ . '/data/uploads/*/doc*', GLOB_ONLYDIR);
+    foreach ($docDirs as $dir) {
+        $files = glob($dir . '/*');
+        if (empty($files)) {
+            @rmdir($dir);
+            // 如果年月目录也空了，也清理
+            $ymDir = dirname($dir);
+            if (is_dir($ymDir) && glob($ymDir . '/*') === []) {
+                @rmdir($ymDir);
+            }
+        }
+    }
+
+    json_out(['ok' => true, 'purged' => count($toPurge), 'deleted_files' => $deletedFiles]);
 }
 
 // ========== 移动/排序 ==========
