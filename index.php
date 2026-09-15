@@ -67,9 +67,28 @@ $tinymceUrl = file_exists($tinymceLocalPath)
 
   /* 侧边栏 */
   .sidebar {
-    width: 280px; background: #fff; border-right: 1px solid #e5e7eb;
+    width: 280px; min-width: 160px; max-width: 600px;
+    background: #fff; border-right: 1px solid #e5e7eb;
     display: flex; flex-direction: column; flex-shrink: 0;
+    transition: width .1s;  /* 平滑过渡 */
   }
+  /* 拖拽分割线 */
+  .sidebar-resizer {
+    width: 6px; flex-shrink: 0; cursor: col-resize;
+    background: transparent; position: relative; z-index: 10;
+    transition: background .15s;
+  }
+  .sidebar-resizer::after {
+    content: ''; position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 3px; height: 32px; border-radius: 2px;
+    background: #d1d5db; transition: background .15s, height .15s;
+  }
+  .sidebar-resizer:hover::after,
+  .sidebar-resizer.dragging::after {
+    background: #4f46e5; height: 48px;
+  }
+  body.resizing { cursor: col-resize; user-select: none !important; }
   .sidebar-toolbar {
     padding: 8px; border-bottom: 1px solid #f3f4f6; display: flex; gap: 6px; flex-wrap: wrap;
   }
@@ -293,6 +312,7 @@ $tinymceUrl = file_exists($tinymceLocalPath)
         <button class="btn-trash-toggle auth-only" onclick="toggleTrash()" title="查看回收站">🗑 回收站</button>
       </div>
     </aside>
+    <div id="sidebar-resizer" class="sidebar-resizer" title="拖动调整侧边栏宽度"></div>
     <main class="main">
       <div id="editor-area" style="display:none;">
         <div class="editor-header">
@@ -433,7 +453,7 @@ function showModal({ title = '', message = '', type = 'info', input = null, inpu
       document.removeEventListener('keydown', keyHandler);
     }
     function keyHandler(e) {
-      if (e.key === 'Escape') { close(); resolve(false); }
+      if (e.key === 'Escape') { close(); resolve(null); }  // null 表示用户关闭弹窗（非保存/非丢弃）
       else if (e.key === 'Enter' && input !== null) { okBtn.click(); }
       else if (e.key === 'Enter' && input === null) { close(); resolve(true); }
     }
@@ -521,14 +541,20 @@ async function enterEditMode() {
     if (r.ok) {
       editor.setContent(r.data.content || '');
       document.getElementById('doc-title').value = r.data.title || '';
+      // 记录初始状态，用于检测未保存改动
+      lastSavedTitle = r.data.title || '';
+      lastSavedContent = r.data.content || '';
     }
   }
   setSaveStatus('');
 }
 
 /* 退出编辑模式（不退出登录） */
-function exitEditMode() {
+async function exitEditMode() {
   if (!isEditing) return;
+  // 退出前询问是否保存
+  const ok = await confirmSaveBeforeSwitch();
+  if (!ok) return;  // 用户取消退出
   isEditing = false;
   if (editor) {
     editor.remove();
@@ -542,6 +568,11 @@ function exitEditMode() {
 }
 
 async function doLogout() {
+  // 退出登录前询问是否保存未保存改动
+  if (isEditing) {
+    const ok = await confirmSaveBeforeSwitch();
+    if (!ok) return;  // 用户取消退出
+  }
   await api('logout');
   isLoggedIn = false;
   isEditing = false;
@@ -1114,6 +1145,22 @@ async function renameNode(node) {
 async function selectNode(node) {
   if (node.is_folder == 1) return; // 文件夹不进入编辑
 
+  // 切换文档前：如果有未保存改动，询问用户
+  if (node.id != currentDocId) {
+    const ok = await confirmSaveBeforeSwitch();
+    if (!ok) return;  // 用户取消切换
+  }
+
+  // 切换文档时自动退出编辑模式（避免误改其他文档）
+  if (isEditing) {
+    isEditing = false;
+    if (editor) {
+      editor.remove();
+      editor = null;
+    }
+    updateAuthUI();
+  }
+
   // 点击文档时清除文件夹选中
   if (selectedFolderId !== null) {
     selectedFolderId = null;
@@ -1298,6 +1345,40 @@ async function initEditor() {
 
 /* ========== 保存 ========== */
 let saveTimer = null;
+let lastSavedTitle = '';   // 上次保存的标题（用于检测未保存改动）
+let lastSavedContent = ''; // 上次保存的内容
+
+// 检查当前文档是否有未保存的改动
+function hasUnsavedChanges() {
+  if (!isEditing || !currentDocId) return false;
+  const currentTitle = document.getElementById('doc-title').value;
+  const currentContent = editor ? editor.getContent() : '';
+  return currentTitle !== lastSavedTitle || currentContent !== lastSavedContent;
+}
+
+// 询问用户是否保存未保存的改动（返回 true 表示已处理，可继续切换）
+async function confirmSaveBeforeSwitch() {
+  if (!hasUnsavedChanges()) return true;
+
+  const choice = await showModal({
+    title: '保存更改',
+    message: `文档「${currentDocTitle}」有未保存的改动，是否保存？`,
+    type: 'warning',
+    confirmText: '保存',
+    confirmClass: 'btn-primary',
+    cancelText: '不保存'
+  });
+  if (choice === true) {
+    // 用户选"保存"
+    await saveDoc();
+    return true;
+  } else if (choice === false) {
+    // 用户选"不保存"，丢弃改动
+    return true;
+  }
+  // 用户按 Escape 关闭弹窗，取消切换
+  return false;
+}
 function scheduleAutoSave() {
   if (!isLoggedIn) return;
   clearTimeout(saveTimer);
@@ -1315,6 +1396,8 @@ async function saveDoc() {
   if (r.ok) {
     setSaveStatus('已保存 ' + new Date().toLocaleTimeString());
     currentDocTitle = title;
+    lastSavedTitle = title;
+    lastSavedContent = content;
     await loadTree();
   } else {
     setSaveStatus('保存失败：' + (r.msg || ''));
@@ -1338,6 +1421,35 @@ document.addEventListener('keydown', (e) => {
     saveDoc();
   }
 });
+
+/* ========== 侧边栏拖拽调整 ========== */
+(function initResizer() {
+  const resizer = document.getElementById('sidebar-resizer');
+  const sidebar = document.querySelector('.sidebar');
+  let startX = 0, startWidth = 0;
+
+  resizer.addEventListener('mousedown', (e) => {
+    startX = e.clientX;
+    startWidth = sidebar.offsetWidth;
+    resizer.classList.add('dragging');
+    document.body.classList.add('resizing');
+    e.preventDefault();  // 防止选中文字
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!document.body.classList.contains('resizing')) return;
+    const delta = e.clientX - startX;
+    const newWidth = Math.min(600, Math.max(160, startWidth + delta));
+    sidebar.style.width = newWidth + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!document.body.classList.contains('resizing')) return;
+    document.body.classList.remove('resizing');
+    resizer.classList.remove('dragging');
+    // 刷新后宽度回到初始值（不持久化）
+  });
+})();
 
 /* ========== 启动：检查登录态并加载文档树 ========== */
 (async function init() {
