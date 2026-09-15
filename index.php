@@ -1326,6 +1326,7 @@ async function initEditor() {
       images_upload_handler: async (blobInfo, progress) => {
         const fd = new FormData();
         fd.append('file', blobInfo.blob(), blobInfo.filename());
+        if (currentDocId) fd.append('doc_id', currentDocId);
         const res = await fetch('api.php?action=upload', { method: 'POST', body: fd, credentials: 'same-origin' });
         const json = await res.json();
         if (!json.ok) {

@@ -99,6 +99,7 @@ try {
         case 'move':   do_move($pdo);
         case 'reorder': do_reorder($pdo);
         case 'upload': do_upload();
+        case 'fetch_url': do_fetch_url();
         default:       json_err('未知操作');
     }
 } catch (Throwable $e) {
@@ -398,8 +399,10 @@ function do_upload(): void {
         'image/bmp'   => 'bmp',
     ][$mime];
 
-    // 按年月分目录，避免单目录文件过多
-    $subDir = date('Ym');
+    // 按年月分目录 + 文档 ID 子目录，方便区分附件归属
+    $ym = date('Ym');
+    $docId = input('doc_id') ?: 'temp';  // 编辑中未保存的文档用 temp 目录
+    $subDir = $ym . '/doc' . $docId;
     $destDir = UPLOAD_DIR . $subDir;
     if (!is_dir($destDir)) {
         mkdir($destDir, 0777, true);
@@ -415,4 +418,75 @@ function do_upload(): void {
     // 返回相对 URL（TinyMCE images_upload_url 模式要求返回 location 字段）
     $url = 'data/uploads/' . $subDir . '/' . $fileName;
     json_out(['ok' => true, 'location' => $url, 'url' => $url]);
+}
+
+// ========== 下载远程图片到本地（粘贴外链图片时自动调用） ==========
+function do_fetch_url(): void {
+    require_login();
+
+    $url = input('url');
+    $docId = input('doc_id') ?: 'temp';
+
+    if (!$url) {
+        json_err('缺少 url 参数');
+    }
+    // 安全检查：只允许 http(s)
+    if (!preg_match('#^https?://#i', $url)) {
+        json_err('只允许 http/https 链接');
+    }
+    // 禁止下载内网地址（防止 SSRF）
+    $host = parse_url($url, PHP_URL_HOST);
+    if ($host && (filter_var($host, FILTER_VALIDATE_IP) || preg_match('/localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\./', $host))) {
+        json_err('禁止下载内网地址');
+    }
+    // 禁止下载上传目录下的文件（循环引用）
+    if (strpos($url, 'data/uploads') !== false || strpos($url, 'uploads/') !== false) {
+        json_err('已是本地地址');
+    }
+
+    // 下载
+    $opts = [
+        'http' => [
+            'timeout' => 15,
+            'header'  => "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n",
+        ],
+    ];
+    $ctx = stream_context_create($opts);
+    $data = @file_get_contents($url, false, $ctx);
+    if ($data === false || $data === '') {
+        json_err('下载失败');
+    }
+
+    // MIME 校验
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mime = $finfo->buffer($data);
+    $allowed = [
+        'image/jpeg' => 'jpg',
+        'image/png'  => 'png',
+        'image/gif'  => 'gif',
+        'image/webp' => 'webp',
+        'image/bmp'   => 'bmp',
+    ];
+    if (!isset($allowed[$mime])) {
+        json_err('不支持的图片类型: ' . $mime);
+    }
+    $ext = $allowed[$mime];
+
+    // 存储路径: 年月/docID/
+    $ym = date('Ym');
+    $subDir = $ym . '/doc' . $docId;
+    $destDir = UPLOAD_DIR . $subDir;
+    if (!is_dir($destDir)) {
+        mkdir($destDir, 0777, true);
+    }
+
+    $fileName = date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+    $destPath = $destDir . '/' . $fileName;
+
+    if (!file_put_contents($destPath, $data)) {
+        json_err('保存失败');
+    }
+
+    $localUrl = 'data/uploads/' . $subDir . '/' . $fileName;
+    json_out(['ok' => true, 'location' => $localUrl, 'url' => $localUrl]);
 }

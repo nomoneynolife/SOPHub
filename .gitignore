@@ -16,3 +16,6 @@ Thumbs.db
 # IDE 配置
 .vscode/
 .idea/
+
+# 测试文件
+temp/
