@@ -93,6 +93,7 @@ $tinymceUrl = file_exists($tinymceLocalPath)
   }
   .tree-node:hover { background: #f3f4f6; }
   .tree-node.active { background: #e0e7ff; color: #4338ca; }
+  .tree-node.folder-selected { background: #fef3c7; color: #92400e; box-shadow: inset 3px 0 0 #f59e0b; }
   .tree-node .icon { width: 16px; margin-right: 6px; color: #6b7280; }
   .tree-node .title {
     flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -282,8 +283,8 @@ $tinymceUrl = file_exists($tinymceLocalPath)
   <div class="body">
     <aside class="sidebar">
       <div class="sidebar-toolbar">
-        <button class="btn auth-only" onclick="createNode(0, 1)" title="在根目录新建文件夹">📁 新建文件夹</button>
-        <button class="btn auth-only" onclick="createDocInRoot()" title="在根目录新建文档">📝 新建文档</button>
+        <button class="btn auth-only" onclick="createDocInRootFolder()" title="在选中文件夹或根目录新建文件夹">📁 新建文件夹</button>
+        <button class="btn auth-only" onclick="createDocInRoot()" title="在选中文件夹或根目录新建文档">📝 新建文档</button>
         <button class="btn" onclick="loadTree()" title="刷新">🔄 刷新</button>
       </div>
       <div id="tree" class="tree"></div>
@@ -347,6 +348,7 @@ $tinymceUrl = file_exists($tinymceLocalPath)
 let isLoggedIn = false;
 let isEditing = false;   // 是否进入编辑模式（登录后默认 false，需点编辑按钮才 true）
 let currentDocId = null;
+let selectedFolderId = null;  // 当前选中的文件夹 ID（用于顶栏新建按钮的父级）
 let draggedNode = null;  // 拖拽中的节点
 let currentDocTitle = '';
 let editor = null;
@@ -738,6 +740,7 @@ function renderNode(node) {
   // 标题行：flex 横排 [图标][标题][按钮们]
   const div = document.createElement('div');
   div.className = 'tree-node' + (currentDocId === node.id ? ' active' : '');
+  div.dataset.nodeId = node.id;  // 用于 selectNode 时只更新高亮，避免整树重渲染
   div.onclick = (e) => {
     e.stopPropagation();
     selectNode(node);
@@ -877,11 +880,26 @@ function renderNode(node) {
     };
     div.appendChild(expandBtn);
 
-    // 点击文件夹标题行：折叠/展开（覆盖上面的 selectNode）
-    // 仅影响当前会话的显示状态，不影响"默认展开"设置
+    // 点击文件夹标题行：折叠/展开 + 选中切换
+    // 选中状态用于顶栏"新建文件夹/文档"按钮决定父级
+    // 再次点击同一文件夹 → 取消选中
     div.onclick = (e) => {
       if (e.target.closest('.tree-btn')) return;
       e.stopPropagation();
+
+      // 切换选中状态
+      if (selectedFolderId === node.id) {
+        // 再次点击：取消选中
+        selectedFolderId = null;
+        div.classList.remove('folder-selected');
+      } else {
+        // 先清除其他文件夹的选中
+        document.querySelectorAll('.folder-selected').forEach(el => el.classList.remove('folder-selected'));
+        selectedFolderId = node.id;
+        div.classList.add('folder-selected');
+      }
+
+      // 折叠/展开
       if (childContainer) {
         const willHide = childContainer.style.display !== 'none';
         childContainer.style.display = willHide ? 'none' : 'block';
@@ -1038,7 +1056,11 @@ async function createNode(parentId, isFolder = 0, title = null) {
 }
 
 function createDocInRoot() {
-  createNode(0, 0);
+  createNode(selectedFolderId || 0, 0);
+}
+
+function createDocInRootFolder() {
+  createNode(selectedFolderId || 0, 1);
 }
 
 // 重命名节点
@@ -1065,6 +1087,12 @@ async function renameNode(node) {
 /* ========== 选择节点 + 加载内容 ========== */
 async function selectNode(node) {
   if (node.is_folder == 1) return; // 文件夹不进入编辑
+
+  // 点击文档时清除文件夹选中
+  if (selectedFolderId !== null) {
+    selectedFolderId = null;
+    document.querySelectorAll('.folder-selected').forEach(el => el.classList.remove('folder-selected'));
+  }
 
   currentDocId = node.id;
   currentDocTitle = node.title;
