@@ -364,6 +364,11 @@ $tinymceUrl = file_exists($tinymceLocalPath)
 </div>
 
 <script>
+/* ========== 调试开关 ========== */
+const DEBUG = false;  // 生产环境设为 false，调试时改为 true
+const _log = (...a) => { if (DEBUG) console.log('[SOPHub]', ...a); };
+const _warn = (...a) => { if (DEBUG) console.warn('[SOPHub]', ...a); };
+
 /* ========== 全局状态 ========== */
 let isLoggedIn = false;
 let isEditing = false;   // 是否进入编辑模式（登录后默认 false，需点编辑按钮才 true）
@@ -1372,21 +1377,21 @@ async function fetchRemoteImgToLocal(imgEl, docId) {
       credentials: 'same-origin'
     });
     if (!res.ok) {
-      console.warn('[SOPHub] fetch_url HTTP', res.status, 'for', url.substring(0, 80));
+      _warn('fetch_url HTTP', res.status, 'for', url.substring(0, 80));
       return;
     }
     const json = await res.json();
     if (json.ok) {
-      console.log('[SOPHub] ✓ 外链已本地化:', url.substring(0, 60), '→', json.location);
+      _log('✓ 外链已本地化:', url.substring(0, 60), '→', json.location);
       // 写入映射表
       remoteImgMap.set(url, json.location);
       // 改 DOM（虽然 TinyMCE 可能不感知，但至少视觉上是对的）
       imgEl.setAttribute('src', json.location);
     } else {
-      console.warn('[SOPHub] ✗ 下载失败:', json.msg, url.substring(0, 80));
+      _warn('✗ 下载失败:', json.msg, url.substring(0, 80));
     }
   } catch (err) {
-    console.warn('[SOPHub] ✗ 下载异常:', err.message, url.substring(0, 80));
+    _warn('✗ 下载异常:', err.message, url.substring(0, 80));
   }
 }
 
@@ -1409,7 +1414,7 @@ async function fetchRemoteImagesInEditor(ed) {
 
   if (pending.length === 0) return;
 
-  console.log(`[SOPHub] 发现 ${pending.length} 张外链图片，开始下载...`);
+  _log(`发现 ${pending.length} 张外链图片，开始下载...`);
   setSaveStatus(`正在下载 ${pending.length} 张外链图片到本地...`);
 
   const docId = currentDocId || 'temp';
@@ -1418,7 +1423,7 @@ async function fetchRemoteImagesInEditor(ed) {
 
   setSaveStatus('');
   // 下载完成后自动保存（映射表里有了，saveDoc 会替换）
-  console.log('[SOPHub] 外链图片处理完成，触发自动保存');
+  _log('外链图片处理完成，触发自动保存');
   scheduleAutoSave();
 }
 
