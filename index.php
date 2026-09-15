@@ -349,6 +349,7 @@ let isLoggedIn = false;
 let isEditing = false;   // 是否进入编辑模式（登录后默认 false，需点编辑按钮才 true）
 let currentDocId = null;
 let selectedFolderId = null;  // 当前选中的文件夹 ID（用于顶栏新建按钮的父级）
+let expandedFolders = new Set();  // 当前会话展开的文件夹 ID（避免 loadTree 后丢失展开状态）
 let draggedNode = null;  // 拖拽中的节点
 let currentDocTitle = '';
 let editor = null;
@@ -579,6 +580,13 @@ async function loadTree() {
   const r = await api('list', {}, 'GET');
   if (!r.ok) return;
   treeData = r.data;
+  // 同步数据库中 expanded=1 的文件夹到 expandedFolders（首次加载或刷新）
+  // 但不清除用户手动折叠的（已从 expandedFolders 删除的不会重新加回）
+  treeData.forEach(d => {
+    if (d.is_folder == 1 && d.expanded == 1) {
+      expandedFolders.add(parseInt(d.id));
+    }
+  });
   renderTree();
 }
 
@@ -880,30 +888,31 @@ function renderNode(node) {
     };
     div.appendChild(expandBtn);
 
-    // 点击文件夹标题行：折叠/展开 + 选中切换
-    // 选中状态用于顶栏"新建文件夹/文档"按钮决定父级
-    // 再次点击同一文件夹 → 取消选中
+    // 点击文件夹标题行：折叠/展开 + 选中
+    // 选中态下再次点击：只折叠/展开，不取消选中（避免误操作丢失选中）
+    // 取消选中只能通过：点击其他文件夹 / 点击文档
     div.onclick = (e) => {
       if (e.target.closest('.tree-btn')) return;
       e.stopPropagation();
 
-      // 切换选中状态
-      if (selectedFolderId === node.id) {
-        // 再次点击：取消选中
-        selectedFolderId = null;
-        div.classList.remove('folder-selected');
-      } else {
-        // 先清除其他文件夹的选中
+      // 选中切换：仅在未选中或选中的不是当前文件夹时才切换
+      if (selectedFolderId !== node.id) {
+        // 清除其他文件夹的选中
         document.querySelectorAll('.folder-selected').forEach(el => el.classList.remove('folder-selected'));
         selectedFolderId = node.id;
         div.classList.add('folder-selected');
       }
+      // 如果已经选中当前文件夹，保持选中，只做折叠/展开
 
       // 折叠/展开
       if (childContainer) {
         const willHide = childContainer.style.display !== 'none';
         childContainer.style.display = willHide ? 'none' : 'block';
         icon.textContent = willHide ? '📂' : '📁';
+        // 同步到 expandedFolders，避免 loadTree 后丢失状态
+        const fid = parseInt(node.id);
+        if (willHide) expandedFolders.delete(fid);
+        else expandedFolders.add(fid);
       }
     };
   }
@@ -914,8 +923,8 @@ function renderNode(node) {
   if (node.is_folder == 1) {
     childContainer = document.createElement('div');
     childContainer.className = 'tree-children';
-    // 默认折叠，仅当 expanded=1 时展开
-    const isExpanded = node.expanded == 1;
+    // 展开：数据库 expanded=1 或会话中已展开的
+    const isExpanded = node.expanded == 1 || expandedFolders.has(parseInt(node.id));
     childContainer.style.display = isExpanded ? 'block' : 'none';
     if (isExpanded) {
       icon.textContent = '📁';
@@ -1048,8 +1057,25 @@ async function createNode(parentId, isFolder = 0, title = null) {
   }
   const r = await api('create', { parent_id: parentId, title, is_folder: isFolder });
   if (r.ok) {
+    // 如果在文件夹下创建，确保父文件夹保持展开和选中状态
+    if (parentId) {
+      expandedFolders.add(parseInt(parentId));
+      // 保持文件夹选中，便于连续创建
+      // 不调用 selectNode，避免清除文件夹选中
+    }
     await loadTree();
-    if (!isFolder) selectNode({ id: r.id, title, is_folder: 0 });
+    // 同步恢复 folder-selected 状态（loadTree 重建 DOM 后丢失）
+    if (parentId) {
+      selectedFolderId = parseInt(parentId);
+      requestAnimationFrame(() => {
+        const folderEl = document.querySelector(`.tree-node[data-node-id="${parentId}"]`);
+        if (folderEl) folderEl.classList.add('folder-selected');
+      });
+    }
+    if (!isFolder && !parentId) {
+      // 只在根目录创建时才自动选中文档
+      selectNode({ id: r.id, title, is_folder: 0 });
+    }
   } else {
     modalAlert(r.msg || '创建失败', '创建失败', 'danger');
   }
