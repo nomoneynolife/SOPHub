@@ -63,6 +63,10 @@ function init_db(): PDO {
     ");
     // 兼容旧库：若 expanded 列不存在则补加
     try { $pdo->exec("ALTER TABLE docs ADD COLUMN expanded INTEGER NOT NULL DEFAULT 0"); } catch (Throwable $e) {}
+    // 兼容旧库：若 deleted 列不存在则补加
+    try { $pdo->exec("ALTER TABLE docs ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"); } catch (Throwable $e) {}
+    // 兼容旧库：若 deleted_at 列不存在则补加
+    try { $pdo->exec("ALTER TABLE docs ADD COLUMN deleted_at TEXT"); } catch (Throwable $e) {}
     return $pdo;
 }
 
@@ -89,6 +93,9 @@ try {
         case 'save':   do_save($pdo);
         case 'create': do_create($pdo);
         case 'delete': do_delete($pdo);
+        case 'trash_list': do_trash_list($pdo);
+        case 'restore': do_restore($pdo);
+        case 'purge': do_purge($pdo);
         case 'move':   do_move($pdo);
         case 'reorder': do_reorder($pdo);
         case 'upload': do_upload();
@@ -118,9 +125,16 @@ function do_check(): void {
     json_out(['ok' => true, 'logged_in' => !empty($_SESSION['sop_logged_in'])]);
 }
 
-// ========== 列表 ==========
+// ========== 列表（仅未删除） ==========
 function do_list(PDO $pdo): void {
-    $rows = $pdo->query("SELECT id, parent_id, title, is_folder, expanded, sort, updated_at FROM docs ORDER BY sort, id")->fetchAll();
+    $rows = $pdo->query("SELECT id, parent_id, title, is_folder, expanded, sort, updated_at FROM docs WHERE deleted = 0 ORDER BY sort, id")->fetchAll();
+    json_out(['ok' => true, 'data' => $rows]);
+}
+
+// ========== 回收站列表（仅已删除） ==========
+function do_trash_list(PDO $pdo): void {
+    require_login();
+    $rows = $pdo->query("SELECT id, parent_id, title, is_folder, expanded, sort, deleted_at FROM docs WHERE deleted = 1 ORDER BY deleted_at DESC, id")->fetchAll();
     json_out(['ok' => true, 'data' => $rows]);
 }
 
@@ -207,12 +221,12 @@ function do_create(PDO $pdo): void {
     json_out(['ok' => true, 'id' => (int)$newId]);
 }
 
-// ========== 删除（递归删除子节点） ==========
+// ========== 软删除（移入回收站，递归标记子节点） ==========
 function do_delete(PDO $pdo): void {
     require_login();
     $id = get_id();
 
-    // 收集要删除的所有 ID
+    // 收集要软删除的所有 ID（节点 + 所有子孙）
     $toDelete = [$id];
     $queue = [$id];
     while (!empty($queue)) {
@@ -225,12 +239,80 @@ function do_delete(PDO $pdo): void {
     }
     $toDelete = array_unique($toDelete);
 
-    // 删除文档记录
+    // 标记为已删除（保留 parent_id 关系，便于还原时保持树结构）
     $placeholders = implode(',', array_fill(0, count($toDelete), '?'));
-    $stmt = $pdo->prepare("DELETE FROM docs WHERE id IN ($placeholders)");
-    $stmt->execute($toDelete);
+    $now = date('Y-m-d H:i:s');
+    $stmt = $pdo->prepare("UPDATE docs SET deleted = 1, deleted_at = ? WHERE id IN ($placeholders)");
+    $stmt->execute(array_merge([$now], $toDelete));
 
     json_out(['ok' => true, 'deleted' => count($toDelete)]);
+}
+
+// ========== 还原（从回收站恢复，递归标记子节点） ==========
+function do_restore(PDO $pdo): void {
+    require_login();
+    $id = get_id();
+
+    // 收集要还原的所有 ID（节点 + 所有子孙，但只包含 deleted=1 的）
+    $toRestore = [$id];
+    $queue = [$id];
+    while (!empty($queue)) {
+        $placeholders = implode(',', array_fill(0, count($queue), '?'));
+        $stmt = $pdo->prepare("SELECT id FROM docs WHERE parent_id IN ($placeholders) AND deleted = 1");
+        $stmt->execute($queue);
+        $children = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        $toRestore = array_merge($toRestore, $children);
+        $queue = $children;
+    }
+    $toRestore = array_unique($toRestore);
+
+    // 检查父节点：如果父节点仍在回收站（deleted=1），把当前节点挂到根（parent_id=0）
+    $stmt = $pdo->prepare("SELECT parent_id FROM docs WHERE id = ?");
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+    if ($row && $row['parent_id'] != 0) {
+        $parentCheck = $pdo->prepare("SELECT deleted FROM docs WHERE id = ?");
+        $parentCheck->execute([$row['parent_id']]);
+        $parent = $parentCheck->fetch();
+        if ($parent && $parent['deleted'] == 1) {
+            // 父节点还在回收站，把当前节点提升为根节点
+            $moveRoot = $pdo->prepare("UPDATE docs SET parent_id = 0 WHERE id = ?");
+            $moveRoot->execute([$id]);
+        }
+    }
+
+    // 还原
+    $placeholders = implode(',', array_fill(0, count($toRestore), '?'));
+    $stmt = $pdo->prepare("UPDATE docs SET deleted = 0, deleted_at = NULL WHERE id IN ($placeholders)");
+    $stmt->execute($toRestore);
+
+    json_out(['ok' => true, 'restored' => count($toRestore)]);
+}
+
+// ========== 彻底删除（从回收站永久删除） ==========
+function do_purge(PDO $pdo): void {
+    require_login();
+    $id = get_id();
+
+    // 收集要彻底删除的所有 ID（节点 + 所有子孙，只包含 deleted=1 的）
+    $toPurge = [$id];
+    $queue = [$id];
+    while (!empty($queue)) {
+        $placeholders = implode(',', array_fill(0, count($queue), '?'));
+        $stmt = $pdo->prepare("SELECT id FROM docs WHERE parent_id IN ($placeholders) AND deleted = 1");
+        $stmt->execute($queue);
+        $children = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        $toPurge = array_merge($toPurge, $children);
+        $queue = $children;
+    }
+    $toPurge = array_unique($toPurge);
+
+    // 真实删除记录（图片文件保留，避免误删）
+    $placeholders = implode(',', array_fill(0, count($toPurge), '?'));
+    $stmt = $pdo->prepare("DELETE FROM docs WHERE id IN ($placeholders)");
+    $stmt->execute($toPurge);
+
+    json_out(['ok' => true, 'purged' => count($toPurge)]);
 }
 
 // ========== 移动/排序 ==========

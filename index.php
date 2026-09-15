@@ -74,6 +74,16 @@ $tinymceUrl = file_exists($tinymceLocalPath)
     padding: 8px; border-bottom: 1px solid #f3f4f6; display: flex; gap: 6px; flex-wrap: wrap;
   }
   .sidebar-toolbar .btn { flex: 1; min-width: 0; font-size: 12px; padding: 4px 8px; }
+  .sidebar-footer {
+    padding: 8px; border-top: 1px solid #f3f4f6; flex-shrink: 0;
+  }
+  .sidebar-footer .btn-trash-toggle {
+    width: 100%; padding: 8px; background: #f9fafb; border: 1px solid #e5e7eb;
+    border-radius: 6px; color: #6b7280; font-size: 13px; cursor: pointer;
+    transition: all .15s;
+  }
+  .sidebar-footer .btn-trash-toggle:hover { background: #f3f4f6; color: #374151; }
+  .sidebar-footer .btn-trash-toggle.active { background: #fef2f2; border-color: #fecaca; color: #dc2626; }
   .tree {
     flex: 1; overflow-y: auto; padding: 4px 0;
   }
@@ -277,6 +287,10 @@ $tinymceUrl = file_exists($tinymceLocalPath)
         <button class="btn" onclick="loadTree()" title="刷新">🔄 刷新</button>
       </div>
       <div id="tree" class="tree"></div>
+      <div id="trash-tree" class="tree" style="display:none;"></div>
+      <div class="sidebar-footer">
+        <button class="btn-trash-toggle auth-only" onclick="toggleTrash()" title="查看回收站">🗑 回收站</button>
+      </div>
     </aside>
     <main class="main">
       <div id="editor-area" style="display:none;">
@@ -532,6 +546,14 @@ async function doLogout() {
     editor.remove();
     editor = null;
   }
+  // 退出时关闭回收站视图
+  if (isTrashView) {
+    isTrashView = false;
+    document.getElementById('tree').style.display = 'block';
+    document.getElementById('trash-tree').style.display = 'none';
+    document.querySelector('.btn-trash-toggle').classList.remove('active');
+    document.querySelector('.btn-trash-toggle').textContent = '🗑 回收站';
+  }
   updateAuthUI();
   // 重新渲染当前文档到阅读视图
   if (currentDocId) {
@@ -581,6 +603,131 @@ function renderTree() {
     return;
   }
   tree.forEach(node => root.appendChild(renderNode(node)));
+}
+
+/* ========== 回收站 ========== */
+let isTrashView = false;
+let trashData = [];
+
+async function toggleTrash() {
+  isTrashView = !isTrashView;
+  const treeEl = document.getElementById('tree');
+  const trashEl = document.getElementById('trash-tree');
+  const btn = document.querySelector('.btn-trash-toggle');
+
+  if (isTrashView) {
+    treeEl.style.display = 'none';
+    trashEl.style.display = 'block';
+    btn.classList.add('active');
+    btn.textContent = '← 返回文档';
+    await loadTrashTree();
+  } else {
+    treeEl.style.display = 'block';
+    trashEl.style.display = 'none';
+    btn.classList.remove('active');
+    btn.textContent = '🗑 回收站';
+  }
+}
+
+async function loadTrashTree() {
+  const r = await api('trash_list', {}, 'GET');
+  if (!r.ok) return;
+  trashData = r.data;
+  renderTrashTree();
+}
+
+function renderTrashTree() {
+  const root = document.getElementById('trash-tree');
+  root.innerHTML = '';
+
+  if (trashData.length === 0) {
+    root.innerHTML = '<div style="padding:16px;color:#9ca3af;text-align:center;">回收站为空</div>';
+    return;
+  }
+
+  // 用 trashData 构建：只在 deleted=1 节点集合中找父子关系
+  // 若 parent_id 不在 trashData 中，则作为根节点显示
+  const tree = buildTree(trashData);
+  tree.forEach(node => root.appendChild(renderTrashNode(node)));
+}
+
+function renderTrashNode(node) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tree-node-wrapper';
+
+  const div = document.createElement('div');
+  div.className = 'tree-node';
+
+  const icon = document.createElement('span');
+  icon.className = 'icon';
+  icon.textContent = node.is_folder == 1 ? '📁' : '📄';
+  icon.style.opacity = '0.5';
+
+  const title = document.createElement('span');
+  title.className = 'title';
+  title.textContent = node.title;
+  title.style.opacity = '0.6';
+  title.style.fontStyle = 'italic';
+
+  // 还原按钮
+  const restoreBtn = document.createElement('button');
+  restoreBtn.className = 'tree-btn edit';
+  restoreBtn.textContent = '↩';
+  restoreBtn.title = '还原';
+  restoreBtn.onclick = async (e) => {
+    e.stopPropagation();
+    const ok = await modalConfirm(`确认还原「${node.title}」及其所有子内容？`, '还原确认', 'info');
+    if (!ok) return;
+    const r = await api('restore', { id: node.id }, 'GET');
+    if (r.ok) {
+      modalAlert(`已还原 ${r.restored} 个项目`, '还原成功', 'success');
+      await loadTrashTree();
+      await loadTree();  // 同步刷新主树
+    } else {
+      modalAlert(r.msg || '还原失败', '还原失败', 'danger');
+    }
+  };
+
+  // 彻底删除按钮
+  const purgeBtn = document.createElement('button');
+  purgeBtn.className = 'tree-btn danger';
+  purgeBtn.textContent = '×';
+  purgeBtn.title = '彻底删除';
+  purgeBtn.onclick = async (e) => {
+    e.stopPropagation();
+    const ok = await modalConfirm(`「${node.title}」将被永久删除，此操作不可恢复！`, '彻底删除确认', 'danger');
+    if (!ok) return;
+    // 二次确认
+    const ok2 = await modalConfirm('真的要永久删除吗？此操作无法撤销！', '再次确认', 'danger');
+    if (!ok2) return;
+    const r = await api('purge', { id: node.id }, 'GET');
+    if (r.ok) {
+      modalAlert(`已永久删除 ${r.purged} 个项目`, '删除完成', 'success');
+      await loadTrashTree();
+    } else {
+      modalAlert(r.msg || '删除失败', '删除失败', 'danger');
+    }
+  };
+
+  div.appendChild(icon);
+  div.appendChild(title);
+  div.appendChild(restoreBtn);
+  div.appendChild(purgeBtn);
+
+  // 回收站里的节点默认展开，方便用户查看被删的结构
+  if (node.is_folder == 1) {
+    const childContainer = document.createElement('div');
+    childContainer.className = 'tree-children';
+    if (node.children && node.children.length) {
+      node.children.forEach(c => childContainer.appendChild(renderTrashNode(c)));
+    }
+    wrapper.appendChild(div);
+    wrapper.appendChild(childContainer);
+  } else {
+    wrapper.appendChild(div);
+  }
+
+  return wrapper;
 }
 
 function renderNode(node) {
@@ -952,8 +1099,12 @@ async function selectNode(node) {
     setSaveStatus('');
   }
 
-  // 高亮当前节点
-  renderTree();
+  // 只更新高亮，不重新渲染整棵树（避免折叠状态丢失）
+  document.querySelectorAll('.tree-node.active').forEach(el => el.classList.remove('active'));
+  // 找到当前节点对应的 DOM 元素并高亮
+  document.querySelectorAll('.tree-node').forEach(el => {
+    if (el.dataset.nodeId == node.id) el.classList.add('active');
+  });
 }
 
 /* ========== URL 路由 ========== */
