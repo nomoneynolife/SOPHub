@@ -108,11 +108,15 @@ sop-system/
 ├── config.php              配置文件（密码、路径）
 ├── api.php                 后端 API（登录、CRUD、图片上传）
 ├── index.php               前端主页面
-├── download-tinymce.ps1    TinyMCE 离线包下载脚本
+├── download-wangeditor.ps1 wangEditor 离线包下载脚本
 ├── LICENSE                 MIT 协议
 ├── README.md               本文件
-├── tinymce/                TinyMCE 离线资源（运行脚本后生成）
-│   └── js/
+├── wangeditor/             wangEditor 离线资源（运行脚本后生成）
+│   └── dist/
+│       ├── index.js        主程序（开发版）
+│       ├── index.min.js    主程序（压缩版，生产用）
+│       └── css/
+│           └── style.css   编辑器样式
 └── data/                   运行时生成
     ├── sop.db
     └── uploads/
@@ -124,15 +128,15 @@ sop-system/
 - **限制写入权限**：仅给 `data/` 目录写权限，其他目录只读
 - **启用 HTTPS**：生产环境建议配置 SSL 证书
 - **定期备份**：备份 `data/` 目录到安全位置
-- **上传限制**：默认限制单文件 10MB，可在 `config.php` 中调整
+- **上传限制**：默认限制单文件 20MB，可在 `config.php` 中调整
 
 ## 常见问题
 
 **Q：图片上传失败怎么办？**
 A：检查 `data/uploads/` 目录是否有写权限，PHP 是否启用 `fileinfo` 扩展。
 
-**Q：TinyMCE 加载失败？**
-A：先运行 `download-tinymce.ps1` 下载离线包；如果用 CDN 模式，确保服务器能访问 `cdn.jsdelivr.net`。
+**Q：wangEditor 加载失败？**
+A：先运行 `download-wangeditor.ps1` 下载离线包；如果用 CDN 模式，确保服务器能访问 `cdn.jsdelivr.net`。
 
 **Q：游客看不到任何文档？**
 A：数据库为空时显示「暂无文档」，登录后创建第一个文档即可。
@@ -146,7 +150,7 @@ A：复制整个 `sop-system/` 目录到新服务器，配置 Web 服务器指�
 
 ## 致谢
 
-- [TinyMCE](https://www.tiny.cloud/) - 富文本编辑器
+- [wangEditor-next](https://github.com/wangeditor-next/wangEditor-next) - 富文本编辑器
 - [jsdelivr](https://www.jsdelivr.com/) - CDN 服务
 
 ---
