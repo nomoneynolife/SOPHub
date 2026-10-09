@@ -21,3 +21,4 @@ Thumbs.db
 # 测试文件
 temp/
 .trae/
+data/*

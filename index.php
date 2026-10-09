@@ -557,8 +557,8 @@ async function enterEditMode() {
   if (editor) {
     const r = await api('get', { id: currentDocId }, 'GET');
     if (r.ok) {
-      editor.clear();
-      editor.dangerouslyInsertHtml(r.data.content || '<p><br></p>');
+      // 用 setHtml 重建 Slate 状态，避免 clear() 后 children 为空导致 end point 错误
+      editor.setHtml(r.data.content || '<p><br></p>');
       document.getElementById('doc-title').value = r.data.title || '';
       // 记录初始状态，用于检测未保存改动
       lastSavedTitle = r.data.title || '';
@@ -1202,8 +1202,8 @@ async function selectNode(node) {
 
   if (isEditing && editor) {
     // 编辑模式：写入编辑器
-    editor.clear();
-    editor.dangerouslyInsertHtml(content || '<p><br></p>');
+    // 用 setHtml 重建 Slate 状态，避免 clear() 后 children 为空导致 end point 错误
+    editor.setHtml(content || '<p><br></p>');
     setSaveStatus('');
   } else {
     // 阅读模式：直接渲染 HTML
@@ -1365,6 +1365,10 @@ function handleCtrlS(e) {
 
 // 销毁 wangEditor 实例（editor + toolbar）
 function destroyEditor() {
+  // 清除待执行的自动保存定时器和外链图片下载定时器，
+  // 避免切换文档后旧定时器把空内容保存到新文档（竞态条件导致内容丢失）
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  if (remoteImgDebounce) { clearTimeout(remoteImgDebounce); remoteImgDebounce = null; }
   if (toolbar) { try { toolbar.destroy(); } catch(e){} toolbar = null; }
   if (editor) { try { editor.destroy(); } catch(e){} editor = null; }
   document.removeEventListener('keydown', handleCtrlS);
@@ -1559,8 +1563,13 @@ function scheduleAutoSave() {
 }
 
 async function saveDoc() {
+  // 清除待执行的自动保存定时器，避免重复保存
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   if (!isLoggedIn) { showLoginModal(); return; }
   if (!currentDocId) return;
+  // 安全守卫：编辑器已销毁（非编辑模式）时不保存，
+  // 防止把空内容覆盖到当前文档
+  if (!editor) return;
   const title = document.getElementById('doc-title').value.trim() || '未命名';
   let content = editor ? editor.getHtml() : '';
   // 用映射表替换外链图片为本地路径（wangEditor 内部缓存可能没同步 DOM 修改）
