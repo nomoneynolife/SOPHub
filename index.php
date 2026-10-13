@@ -558,7 +558,8 @@ async function enterEditMode() {
     const r = await api('get', { id: currentDocId }, 'GET');
     if (r.ok) {
       // 用 setHtml 重建 Slate 状态，避免 clear() 后 children 为空导致 end point 错误
-      editor.setHtml(r.data.content || '<p><br></p>');
+      // 预处理 Word 历史文档的 VML 条件注释，提取被注释包裹的 <img> 标签
+      editor.setHtml(sanitizeWordHtml(r.data.content) || '<p><br></p>');
       document.getElementById('doc-title').value = r.data.title || '';
       // 记录初始状态，用于检测未保存改动
       lastSavedTitle = r.data.title || '';
@@ -1203,7 +1204,8 @@ async function selectNode(node) {
   if (isEditing && editor) {
     // 编辑模式：写入编辑器
     // 用 setHtml 重建 Slate 状态，避免 clear() 后 children 为空导致 end point 错误
-    editor.setHtml(content || '<p><br></p>');
+    // 预处理 Word 历史文档的 VML 条件注释，提取被注释包裹的 <img> 标签
+    editor.setHtml(sanitizeWordHtml(content) || '<p><br></p>');
     setSaveStatus('');
   } else {
     // 阅读模式：直接渲染 HTML
@@ -1415,6 +1417,24 @@ async function importDocx(event) {
   } finally {
     setSaveStatus('');
   }
+}
+
+/* ========== 预处理 Word 历史文档 HTML ========== */
+/* TinyMCE 时代从 Word 粘贴的内容包含 VML 条件注释，图片被包裹在
+ * <!--[if !vml]--><img ...><!--[endif]--> 中。
+ * 浏览器将这些条件注释视为普通 HTML 注释，里面的 <img> 不会被解析为
+ * DOM 元素，wangEditor 的 setHtml 遍历子元素时就会丢失图片。
+ * 此函数在 setHtml 前调用，提取条件注释中的 <img> 并清除 VML 标记。
+ */
+function sanitizeWordHtml(html) {
+  if (!html || html.indexOf('if gte vml') === -1 && html.indexOf('if !vml') === -1) return html;
+  // 1) 删除 <!-- [if gte vml 1]>...<![endif]--> 块（含 file:/// 路径的 VML 标记）
+  //    注意：Word 条件注释开头可能带空格 "<!-- [if"，且结尾格式为 <![endif]-->
+  let result = html.replace(/<!--\s*\[if\s+gte\s+vml\s+\d+\]>[\s\S]*?<!\[endif\]-->/gi, '');
+  // 2) 去掉 <!-- [if !vml]--> 和 <!--[endif]--> 注释标签，释放其中的 <img>
+  result = result.replace(/<!--\s*\[if\s*!vml\]-->/gi, '');
+  result = result.replace(/<!--\s*\[endif\]-->/gi, '');
+  return result;
 }
 
 /* ========== 外链图片自动下载到本地 ========== */
